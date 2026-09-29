@@ -278,8 +278,16 @@ module.exports = async (req, res) => {
         // 2. صفحة التسجيل
         if (pathname === '/register' && req.method === 'GET') {
             const needCode = !!process.env.REGISTER_CODE;
+            const em = emailEnabled(), wa = waEnabled();
+            if (!em && !wa) {
+                return sendHtml(res, 200, shell('التسجيل غير متاح | ميزان', `
+                    <div class="box" style="text-align:center">
+                        <h2>⚙️ التسجيل غير متاح حالياً</h2>
+                        <p style="color:#C8B8B5;">لم يتم إعداد وسيلة إرسال كود التحقق (بريد أو واتساب) في السيرفر بعد.</p>
+                    </div>`));
+            }
             return sendHtml(res, 200, shell('إنشاء حساب وكالة | ميزان', `
-                <div class="box" id="formBox">
+                <div class="box">
                     <h2>📝 إنشاء حساب وكالة</h2>
                     <form id="f" autocomplete="off">
                         <label>البريد الإلكتروني</label>
@@ -292,28 +300,24 @@ module.exports = async (req, res) => {
                         <input type="password" name="password" minlength="8" required />
                         <label>تأكيد كلمة المرور</label>
                         <input type="password" name="password2" minlength="8" required />
+                        <label>استلام كود التحقق عن طريق</label>
+                        <div>
+                            ${em ? `<label class="radio"><input type="radio" name="channel" value="email" checked />البريد الإلكتروني</label>` : ''}
+                            ${wa ? `<label class="radio"><input type="radio" name="channel" value="whatsapp" ${em ? '' : 'checked'} />واتساب</label>` : ''}
+                        </div>
+                        <div id="phoneBox" style="display:none">
+                            <label>رقم الواتساب (مثال: 01012345678)</label>
+                            <input type="tel" name="phone" />
+                        </div>
                         ${needCode ? `<label>كود التسجيل (من مزوّد الخدمة)</label><input type="text" name="register_code" required />` : ''}
-                        <button type="submit">إنشاء الحساب</button>
+                        <button type="submit">إنشاء الحساب وإرسال الكود</button>
                         <div class="msg" id="msg"></div>
                     </form>
                     <a class="btn small" href="/login">لديك حساب؟ سجّل الدخول</a>
-                </div>
-                <div class="box" id="resBox" style="display:none">
-                    <h2>✅ تم إنشاء الحساب</h2>
-                    <label>الرابط الخاص بوكالتك (للموبايل وللكمبيوتر)</label>
-                    <input type="text" id="link" readonly />
-                    <button class="small" type="button" onclick="copyFrom('link')">📋 نسخ الرابط</button>
-                    <label>كود الوكالة (يُستخدم في برنامج الكمبيوتر)</label>
-                    <input type="text" id="key" readonly />
-                    <button class="small" type="button" onclick="copyFrom('key')">📋 نسخ الكود</button>
-                    <div class="note">
-                        ⚠️ الرابط والكود سريان: كل من يملكهما يستطيع رؤية بيانات وكالتك، فلا تشاركهما مع أحد.<br>
-                        لو ضاع منك الرابط، ادخل بصفحة تسجيل الدخول باسم المستخدم وكلمة المرور وسيظهر لك من جديد.
-                    </div>
                 </div>`, REGISTER_SCRIPT));
         }
 
-        // 3. تنفيذ التسجيل
+        // 3. تنفيذ التسجيل (يرسل كود تحقق ولا يُصدر الرابط قبل التأكيد)
         if (pathname === '/api/register' && req.method === 'POST') {
             if (!(await rateLimit(req, 'register', 10))) {
                 return sendJson(res, 429, { success: false, message: 'محاولات كثيرة، حاول بعد قليل.' });
@@ -331,6 +335,7 @@ module.exports = async (req, res) => {
             const agencyName = String(b.agency_name || '').trim();
             const username = String(b.username || '').trim().toLowerCase();
             const password = String(b.password || '');
+            const channel = String(b.channel || 'email');
 
             if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) || email.length > 120)
                 return sendJson(res, 400, { success: false, message: 'البريد الإلكتروني غير صحيح.' });
@@ -340,34 +345,163 @@ module.exports = async (req, res) => {
                 return sendJson(res, 400, { success: false, message: 'اسم المستخدم: 3 إلى 30 حرفاً إنجليزياً أو أرقاماً أو _' });
             if (password.length < 8 || password.length > 100)
                 return sendJson(res, 400, { success: false, message: 'كلمة المرور لا تقل عن 8 أحرف.' });
+            if (!((channel === 'email' && emailEnabled()) || (channel === 'whatsapp' && waEnabled())))
+                return sendJson(res, 400, { success: false, message: 'وسيلة التحقق المختارة غير متاحة.' });
+
+            let phone = null;
+            if (channel === 'whatsapp') {
+                phone = normalizePhone(b.phone);
+                if (!phone) return sendJson(res, 400, { success: false, message: 'رقم الواتساب غير صحيح.' });
+            }
 
             const salt = crypto.randomBytes(16).toString('hex');
             const agencyKey = crypto.randomBytes(24).toString('hex'); // 48 حرف عشوائي
             const record = {
                 email,
+                phone,
                 agency_name: agencyName,
                 username,
                 salt,
                 password_hash: await hashPassword(password, salt),
                 agency_key: agencyKey,
+                verified: false,
+                verify_channel: channel,
                 created_at: new Date().toISOString()
             };
 
-            const userOk = await redis.set(`user:${username}`, record, { nx: true });
+            const userOk = await redis.set(`user:${username}`, record, { nx: true, ex: UNVERIFIED_TTL });
             if (!userOk) return sendJson(res, 409, { success: false, message: 'اسم المستخدم مستخدم بالفعل.' });
 
-            const emailOk = await redis.set(`email:${email}`, username, { nx: true });
+            const emailOk = await redis.set(`email:${email}`, username, { nx: true, ex: UNVERIFIED_TTL });
             if (!emailOk) {
                 await redis.del(`user:${username}`);
                 return sendJson(res, 409, { success: false, message: 'هذا البريد مسجّل بالفعل.' });
             }
-            await redis.set(`keyidx:${agencyKey}`, username);
+            if (phone) {
+                const phoneOk = await redis.set(`phone:${phone}`, username, { nx: true, ex: UNVERIFIED_TTL });
+                if (!phoneOk) {
+                    await redis.del(`user:${username}`);
+                    await redis.del(`email:${email}`);
+                    return sendJson(res, 409, { success: false, message: 'رقم الواتساب مسجّل بالفعل.' });
+                }
+            }
+
+            try {
+                await issueCode(record);
+            } catch (err) {
+                console.error('send code failed:', err.message);
+                await dropAccount(record);
+                return sendJson(res, 502, { success: false, message: 'تعذر إرسال كود التحقق. تأكد من صحة البيانات وحاول مرة أخرى.' });
+            }
+
+            await redis.set(`cool:${username}`, 1, { ex: 60 }); // أول إعادة إرسال بعد دقيقة
+            return sendJson(res, 200, { success: true, need_verify: true, username, sent_to: maskFor(record) });
+        }
+
+        // 3.1 صفحة إدخال كود التحقق
+        if (pathname === '/verify' && req.method === 'GET') {
+            return sendHtml(res, 200, shell('تأكيد الحساب | ميزان', `
+                <div class="box" id="formBox">
+                    <h2>📩 تأكيد الحساب</h2>
+                    <p class="note" id="info" style="text-align:center">أدخل كود التحقق المكوّن من 6 أرقام.</p>
+                    <form id="f">
+                        <label>كود التحقق</label>
+                        <input type="text" name="code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" required autocomplete="one-time-code" dir="ltr" style="text-align:center;letter-spacing:6px;font-size:22px" />
+                        <button type="submit">تأكيد</button>
+                        <div class="msg" id="msg"></div>
+                    </form>
+                    <button class="small" type="button" id="resend">🔁 إرسال كود جديد</button>
+                </div>
+                <div class="box" id="resBox" style="display:none">
+                    <h2>✅ تم تفعيل الحساب</h2>
+                    <label>الرابط الخاص بوكالتك (للموبايل وللكمبيوتر)</label>
+                    <input type="text" id="link" readonly />
+                    <button class="small" type="button" onclick="copyFrom('link')">📋 نسخ الرابط</button>
+                    <label>كود الوكالة (يُستخدم في برنامج الكمبيوتر)</label>
+                    <input type="text" id="key" readonly />
+                    <button class="small" type="button" onclick="copyFrom('key')">📋 نسخ الكود</button>
+                    <div class="note">
+                        ⚠️ الرابط والكود سريان: كل من يملكهما يستطيع رؤية بيانات وكالتك، فلا تشاركهما مع أحد.<br>
+                        لو ضاع منك الرابط، ادخل بصفحة تسجيل الدخول باسم المستخدم وكلمة المرور وسيظهر لك من جديد.
+                    </div>
+                </div>`, VERIFY_SCRIPT));
+        }
+
+        // 3.2 تأكيد الكود وتفعيل الحساب (هنا فقط يُصدر الرابط)
+        if (pathname === '/api/verify' && req.method === 'POST') {
+            if (!(await rateLimit(req, 'verify', 20))) {
+                return sendJson(res, 429, { success: false, message: 'محاولات كثيرة، حاول بعد قليل.' });
+            }
+            let b;
+            try { b = await readJson(req); } catch (e) {
+                return sendJson(res, 400, { success: false, message: 'بيانات غير صالحة.' });
+            }
+            const username = String(b.username || '').trim().toLowerCase();
+            const code = String(b.code || '').trim();
+            const user = /^[a-z0-9_]{3,30}$/.test(username) ? await redis.get(`user:${username}`) : null;
+
+            if (!user) return sendJson(res, 404, { success: false, message: 'الحساب غير موجود أو انتهت مهلة التفعيل، سجّل من جديد.' });
+            if (user.verified !== false) return sendJson(res, 400, { success: false, message: 'الحساب مفعّل بالفعل، سجّل الدخول.' });
+
+            const otp = await redis.get(`otp:${username}`);
+            if (!otp || otp.expires < Date.now())
+                return sendJson(res, 400, { success: false, message: 'انتهت صلاحية الكود، اطلب كوداً جديداً.' });
+            if (otp.attempts >= 5) {
+                await redis.del(`otp:${username}`);
+                return sendJson(res, 429, { success: false, message: 'تجاوزت عدد المحاولات، اطلب كوداً جديداً.' });
+            }
+
+            const given = Buffer.from(otpHash(user.salt, code));
+            const real = Buffer.from(otp.hash);
+            const ok = given.length === real.length && crypto.timingSafeEqual(given, real);
+            if (!ok) {
+                otp.attempts += 1;
+                await redis.set(`otp:${username}`, otp, { ex: Math.max(1, Math.ceil((otp.expires - Date.now()) / 1000)) });
+                return sendJson(res, 400, { success: false, message: 'الكود غير صحيح.' });
+            }
+
+            user.verified = true;
+            user.verified_at = new Date().toISOString();
+            await redis.set(`user:${username}`, user);              // بدون انتهاء صلاحية
+            await redis.persist(`email:${user.email}`);
+            if (user.phone) await redis.persist(`phone:${user.phone}`);
+            await redis.set(`keyidx:${user.agency_key}`, username); // تفعيل المزامنة
+            await redis.del(`otp:${username}`);
 
             return sendJson(res, 200, {
                 success: true,
-                agency_key: agencyKey,
-                link: `${originOf(req)}/app?key=${agencyKey}`
+                agency_key: user.agency_key,
+                link: `${originOf(req)}/app?key=${user.agency_key}`
             });
+        }
+
+        // 3.3 إعادة إرسال الكود
+        if (pathname === '/api/resend' && req.method === 'POST') {
+            if (!(await rateLimit(req, 'resend', 10))) {
+                return sendJson(res, 429, { success: false, message: 'محاولات كثيرة، حاول بعد قليل.' });
+            }
+            let b;
+            try { b = await readJson(req); } catch (e) {
+                return sendJson(res, 400, { success: false, message: 'بيانات غير صالحة.' });
+            }
+            const username = String(b.username || '').trim().toLowerCase();
+            const user = /^[a-z0-9_]{3,30}$/.test(username) ? await redis.get(`user:${username}`) : null;
+            if (!user || user.verified !== false)
+                return sendJson(res, 400, { success: false, message: 'لا يمكن إرسال كود لهذا الحساب.' });
+
+            const cool = await redis.set(`cool:${username}`, 1, { nx: true, ex: 60 });
+            if (!cool) return sendJson(res, 429, { success: false, message: 'انتظر دقيقة قبل طلب كود جديد.' });
+            const n = await redis.incr(`sends:${username}`);
+            if (n === 1) await redis.expire(`sends:${username}`, 3600);
+            if (n > 5) return sendJson(res, 429, { success: false, message: 'تجاوزت الحد، حاول بعد ساعة.' });
+
+            try {
+                await issueCode(user);
+            } catch (err) {
+                console.error('resend failed:', err.message);
+                return sendJson(res, 502, { success: false, message: 'تعذر إرسال الكود، حاول لاحقاً.' });
+            }
+            return sendJson(res, 200, { success: true, sent_to: maskFor(user) });
         }
 
         // 4. صفحة تسجيل الدخول
@@ -408,6 +542,9 @@ module.exports = async (req, res) => {
                 crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(user.password_hash));
 
             if (!ok) return sendJson(res, 401, { success: false, message: 'اسم المستخدم أو كلمة المرور غير صحيحة.' });
+
+            if (user.verified === false)
+                return sendJson(res, 200, { success: false, need_verify: true, username, message: 'الحساب غير مفعّل بعد.' });
 
             return sendJson(res, 200, {
                 success: true,
