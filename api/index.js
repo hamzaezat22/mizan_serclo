@@ -12,7 +12,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 const versionInfo = {
     latest_version: "2.1.0",
     download_url: "https://example.com/downloads/Mizan_Agency_Update.exe",
-    changelog: "معالجة احتساب الأرباح اللحظية وتمييز مستخدمي السيرفر"
+    changelog: "الواجهة الملكية السحابية الشاملة لكافة أقسام وخدمات الوكالة"
 };
 
 const sendJson = (res, status, obj) => {
@@ -155,12 +155,13 @@ async function dropAccount(user) {
 const originOf = req => `https://${req.headers['x-forwarded-host'] || req.headers.host}`;
 
 const STYLE = `
-body { font-family: -apple-system, Tahoma, 'Cairo', sans-serif; background: #200308; color: #FAF4F1; padding: 15px; text-align: center; margin: 0; }
-.box { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 12px; max-width: 440px; margin: 25px auto; padding: 25px; text-align: right; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+body { font-family: 'Cairo', -apple-system, Tahoma, sans-serif; background: #200308; color: #FAF4F1; padding: 15px; text-align: center; margin: 0; }
+.box { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 14px; max-width: 450px; margin: 25px auto; padding: 25px; text-align: right; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
 h2 { color: #D4AF37; text-align: center; margin-top: 0; }
 label { font-size: 13px; color: #C8B8B5; display: block; margin-top: 10px; font-weight: bold; }
-input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 4px; border-radius: 6px; border: 1px solid #D4AF37; font-size: 14px; background: #FAF4F1; color: #1E1E1E; font-family: inherit; }
-button, .btn { width: 100%; box-sizing: border-box; background: #5A0817; color: white; border: 1px solid #D4AF37; padding: 11px; border-radius: 8px; font-weight: bold; font-size: 14.5px; cursor: pointer; margin-top: 14px; text-decoration: none; display: block; text-align: center; font-family: inherit; }
+input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 4px; border-radius: 6px; border: 1.2px solid #D4AF37; font-size: 14px; background: #FAF4F1; color: #1E1E1E; font-family: inherit; font-weight: 600; }
+button, .btn { width: 100%; box-sizing: border-box; background: #5A0817; color: white; border: 1.2px solid #D4AF37; padding: 11px; border-radius: 8px; font-weight: bold; font-size: 14.5px; cursor: pointer; margin-top: 14px; text-decoration: none; display: block; text-align: center; font-family: inherit; }
 button:hover, .btn:hover { background: #7A0B20; }
 .small { background: #2A040B; color: #D4AF37; padding: 8px; font-size: 13px; margin-top: 6px; }
 .msg { color: #ff8a8a; font-size: 13.5px; margin-top: 10px; min-height: 18px; text-align: center; font-weight: bold; }
@@ -556,7 +557,6 @@ module.exports = async (req, res) => {
             const cleanUser = username.toLowerCase();
             const syncedUsers = data && Array.isArray(data.users) ? data.users : [];
 
-            // 1. فحص مستخدمي الوكالة المتزامنين من الديسكتوب
             const matchedUser = syncedUsers.find(u => {
                 const uName = String(u.Username || u.username || '').toLowerCase();
                 const fName = String(u.FullName || u.fullName || u.full_name || '').toLowerCase();
@@ -582,7 +582,6 @@ module.exports = async (req, res) => {
                 });
             }
 
-            // 2. حساب المالك الرئيسي كـ Fallback
             if (ownerUser && (ownerUser.username.toLowerCase() === cleanUser || cleanUser === 'admin')) {
                 const salt = ownerUser.salt;
                 const hash = await hashPassword(password, salt);
@@ -748,7 +747,7 @@ module.exports = async (req, res) => {
             });
         }
 
-        // 13. بوابة الويب السحابية الشاملة لكافة الأقسام والخدمات مع دعم حقول الديسكتوب المتزامنة
+        // 13. بوابة الويب السحابية الملكية الشاملة لكافة الأقسام والخدمات وطباعة الشبكة
         if (pathname === '/app') {
             const key = String(query.key || '').trim();
             const data = key ? await redis.get(`agency:${key}`) : null;
@@ -778,13 +777,11 @@ module.exports = async (req, res) => {
             const recentSales = Array.isArray(data.recent_sales) ? data.recent_sales : [];
             const collections = Array.isArray(data.collections) ? data.collections : [];
             const expenses = Array.isArray(data.expenses) ? data.expenses : [];
-            const crates = Array.isArray(data.crates) ? data.crates : [];
-            const purchases = Array.isArray(data.purchases) ? data.purchases : [];
             const bankAccounts = Array.isArray(data.bank_accounts) ? data.bank_accounts : [];
             const checks = Array.isArray(data.checks) ? data.checks : [];
             const weighbridgeTickets = Array.isArray(data.weighbridge_tickets) ? data.weighbridge_tickets : [];
 
-            // دوال استخراج القيم الآمنة لتفادي حساسية الأحرف
+            // دوال الاستخراج الذكية للبيانات
             const getName = o => o.Name || o.name || o.FullName || o.fullName || '';
             const getSupplier = o => o.Supplier || o.supplier || '';
             const getPrice = o => Number(o.DefaultPrice || o.defaultPrice || o.Price || o.price || 0);
@@ -798,30 +795,34 @@ module.exports = async (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(data.agency_name)} | المنظومة السحابية الشاملة</title>
+<title>${esc(data.agency_name)} | منظومة ميزان السحابية الشاملة</title>
 <style>
-body { font-family: -apple-system, Tahoma, 'Cairo', sans-serif; background: #200308; margin: 0; padding: 12px; color: #FAF4F1; }
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Aref+Ruqaa:wght@700&display=swap');
+body { font-family: 'Cairo', -apple-system, Tahoma, sans-serif; background: #200308; margin: 0; padding: 12px; color: #FAF4F1; }
+
 #loginScreen { display: flex; justify-content: center; align-items: center; min-height: 90vh; }
-.login-box { background: #2A040B; border: 1.8px solid #D4AF37; border-radius: 16px; max-width: 420px; width: 100%; padding: 28px; text-align: right; box-shadow: 0 15px 40px rgba(0,0,0,0.6); }
+.login-box { background: #2A040B; border: 1.8px solid #D4AF37; border-radius: 16px; max-width: 430px; width: 100%; padding: 28px; text-align: right; box-shadow: 0 15px 40px rgba(0,0,0,0.6); }
 .login-header { text-align: center; margin-bottom: 20px; }
-.login-header h2 { margin: 0 0 6px 0; color: #D4AF37; font-size: 22px; }
+.login-header h2 { margin: 0 0 6px 0; color: #D4AF37; font-size: 24px; font-family: 'Aref Ruqaa', 'Cairo', serif; }
 .login-header p { margin: 0; color: #C8B8B5; font-size: 13px; }
 .badge { background: #5A0817; color: #FAF4F1; padding: 6px 10px; border-radius: 6px; font-weight: bold; font-size: 12.5px; text-align: center; margin-bottom: 15px; border: 1px solid #D4AF37; }
 
 #mainAppScreen { display: none; background: #FAF4F1; border-radius: 12px; padding: 12px; color: #1E1E1E; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
 .header { background: #2A040B; color: #FFF; padding: 16px; border-radius: 12px; text-align: center; border-bottom: 3px solid #D4AF37; margin-bottom: 12px; }
-.header h2 { margin: 0; color: #D4AF37; font-size: 20px; }
+.header h2 { margin: 0; color: #D4AF37; font-size: 22px; font-family: 'Aref Ruqaa', 'Cairo', serif; }
 .user-bar { background: #38050E; color: #D4AF37; padding: 8px 12px; border-radius: 8px; margin-top: 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
+
 .nav-scroll { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 12px; padding-bottom: 6px; }
-.tab-btn { background: #2A040B; color: #FAF4F1; border: 1px solid #D4AF37; padding: 9px 12px; border-radius: 8px; font-weight: bold; cursor: pointer; white-space: nowrap; font-size: 12.5px; font-family: inherit; }
+.tab-btn { background: #2A040B; color: #FAF4F1; border: 1px solid #D4AF37; padding: 9px 12px; border-radius: 8px; font-weight: bold; cursor: pointer; white-space: nowrap; font-size: 12px; font-family: inherit; }
 .tab-btn.active { background: #5A0817; color: #D4AF37; border-color: #D4AF37; }
 .tab-content { display: none; }
 .tab-content.active { display: block; }
+
 .card { background: #FFF; border-radius: 10px; padding: 14px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-right: 4px solid #5A0817; color: #1E1E1E; }
 .val { font-size: 20px; font-weight: bold; color: #0D7857; margin-top: 4px; }
 .form-card { background: #FFF; border-radius: 10px; padding: 16px; margin-bottom: 14px; border: 1.5px solid #D4AF37; box-shadow: 0 4px 12px rgba(0,0,0,0.08); color: #1E1E1E; }
 label { font-size: 12.5px; font-weight: bold; margin-top: 8px; display: block; color: #5A0817; }
-input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 4px; border-radius: 6px; border: 1px solid #C8B8B5; font-size: 13.5px; background: #FFF; color: #1E1E1E; font-family: inherit; }
+input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 4px; border-radius: 6px; border: 1.2px solid #C8B8B5; font-size: 13.5px; background: #FFF; color: #1E1E1E; font-family: inherit; font-weight: 600; }
 .submit-btn { width: 100%; background: #5A0817; color: white; border: 1px solid #D4AF37; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 14.5px; cursor: pointer; margin-top: 14px; font-family: inherit; }
 .submit-btn:hover { background: #7A0B20; }
 .logout-btn { background: #DC2626; color: white; border: 1px solid #D4AF37; padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 11.5px; cursor: pointer; }
@@ -832,6 +833,13 @@ th { background: #5A0817; color: white; }
 .grid-2 { display: flex; gap: 8px; }
 .grid-2 > div { flex: 1; }
 .msg { color: #ff8a8a; font-size: 13.5px; margin-top: 10px; min-height: 18px; text-align: center; font-weight: bold; }
+
+@media print {
+    body { background: white; color: black; padding: 0; }
+    #mainAppScreen, .header, .nav-scroll, .form-card, button { display: none !important; }
+    #printArea { display: block !important; }
+}
+#printArea { display: none; }
 </style>
 </head>
 <body>
@@ -882,8 +890,9 @@ th { background: #5A0817; color: white; }
             <button class="tab-btn active" onclick="switchTab('tab-dash', this)">📊 المؤشرات الحية</button>
             <button class="tab-btn" onclick="switchTab('tab-pos', this)">🛒 نقطة البيع (POS)</button>
             <button class="tab-btn" onclick="switchTab('tab-sales-reg', this)">📋 سجل المبيعات</button>
-            <button class="tab-btn" onclick="switchTab('tab-load', this)">🚚 تنزيل سيارة</button>
-            <button class="tab-btn" onclick="switchTab('tab-stock', this)">🚛 جرد الأرضية</button>
+            <button class="tab-btn" onclick="switchTab('tab-load', this)">🚚 ساحة السيارات</button>
+            <button class="tab-btn" onclick="switchTab('tab-settle', this)">🚛 تصفية الأمانات</button>
+            <button class="tab-btn" onclick="switchTab('tab-stock', this)">📦 جرد الأرضية</button>
             <button class="tab-btn" onclick="switchTab('tab-col', this)">🧾 سندات التحصيل</button>
             <button class="tab-btn" onclick="switchTab('tab-pending', this)">📄 الفواتير الآجلة</button>
             <button class="tab-btn" onclick="switchTab('tab-exp', this)">💸 الخزينة والمصروفات</button>
@@ -892,6 +901,7 @@ th { background: #5A0817; color: white; }
             <button class="tab-btn" onclick="switchTab('tab-bank', this)">🏦 البنوك والشيكات</button>
             <button class="tab-btn" onclick="switchTab('tab-wb', this)">⚖️ ميزان بسكول</button>
             <button class="tab-btn" onclick="switchTab('tab-master', this)">👥 دليل الحسابات</button>
+            <button class="tab-btn" onclick="switchTab('tab-printer', this)">🖨️ إعدادات الطابعات والشبكة</button>
         </div>
 
         <!-- 1. المؤشرات الحية -->
@@ -995,7 +1005,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 4. تنزيل سيارة -->
+        <!-- 4. ساحة توريد السيارات -->
         <div id="tab-load" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">🚚 توريد وتنزيل سيارة بالأرضية</h3>
@@ -1035,7 +1045,24 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 5. جرد الأرضية -->
+        <!-- 5. تصفية سيارات الأمانة -->
+        <div id="tab-settle" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">🚛 تصفية وإقفال سيارة أمانة</h3>
+                <label>اختر السيارة للتصفية</label>
+                <select id="settleLoadSelect" onchange="updateSettlePreview()">
+                    <option value="">-- اختر السيارة --</option>
+                    ${loads.map(l => `<option value="${esc(getSupplier(l))} | ${esc(getVehicle(l))} | ${esc(getDate(l))}" data-supplier="${esc(getSupplier(l))}" data-freight="${l.Freight || l.freight || 0}" data-comm="${l.Commission || l.commission || 5}">${esc(getSupplier(l))} | ${esc(getVehicle(l))} (${esc(getItem(l))})</option>`).join('')}
+                </select>
+                <div id="settlePreviewBox" style="margin-top:12px;display:none;" class="card">
+                    <div>المورد: <b id="settleSuppTxt"></b></div>
+                    <div>نولون النقل: <b id="settleFreightTxt">0 ج</b></div>
+                    <div>نسبة العمولة: <b id="settleCommTxt">5%</b></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 6. جرد الأرضية -->
         <div id="tab-stock" class="tab-content">
             <h3>🚚 بضاعة الأرضية والسيارات المفتوحة (${esc(floorStock.length)})</h3>
             <table>
@@ -1052,7 +1079,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 6. سندات التحصيل -->
+        <!-- 7. سندات التحصيل -->
         <div id="tab-col" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">🧾 تسجيل سند قبض وتحصيل</h3>
@@ -1090,7 +1117,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 7. الفواتير الآجلة -->
+        <!-- 8. الفواتير الآجلة -->
         <div id="tab-pending" class="tab-content">
             <h3>📄 كشف الفواتير الآجلة غير المسددة بالكامل</h3>
             <table>
@@ -1107,7 +1134,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 8. الخزينة والمصروفات -->
+        <!-- 9. الخزينة والمصروفات -->
         <div id="tab-exp" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">💸 صرف وتسجيل مصروف</h3>
@@ -1142,7 +1169,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 9. فواتير المشتريات -->
+        <!-- 10. فواتير المشتريات -->
         <div id="tab-pur" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">📥 تسجيل فاتورة شراء بضاعة وأصول</h3>
@@ -1184,7 +1211,7 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 10. حركة الصناديق -->
+        <!-- 11. حركة الصناديق -->
         <div id="tab-crate" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">📦 حركة وتأمين الصناديق والبرانيك</h3>
@@ -1213,7 +1240,7 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 11. البنوك والشيكات -->
+        <!-- 12. البنوك والشيكات -->
         <div id="tab-bank" class="tab-content">
             <h3>🏦 الحسابات البنكية والشيكات</h3>
             <table>
@@ -1228,7 +1255,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 12. ميزان بسكول -->
+        <!-- 13. ميزان بسكول -->
         <div id="tab-wb" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">⚖️ تسجيل كارتة ميزان بسكول</h3>
@@ -1260,7 +1287,7 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 13. دليل الحسابات -->
+        <!-- 14. دليل الحسابات -->
         <div id="tab-master" class="tab-content">
             <h3>👥 العملاء والموردين (${customers.length} عميل / ${suppliers.length} مورد)</h3>
             <table>
@@ -1269,7 +1296,34 @@ th { background: #5A0817; color: white; }
                 ${suppliers.map(s => `<tr><td>${esc(getName(s))}</td><td>مورد</td><td>عمولة: ${esc(s.DefaultCommission || s.defaultCommission || 0)}%</td></tr>`).join('')}
             </table>
         </div>
+
+        <!-- 15. إعدادات الطابعات والشبكة والطباعة من الهاتف -->
+        <div id="tab-printer" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">🖨️ إعدادات الطابعات والشبكة (Mobile &amp; Thermal Printing)</h3>
+                <label>مقاس الطباعة الافتراضي على الهاتف والمتصفح</label>
+                <select id="webPrinterSize" onchange="savePrinterPrefs()">
+                    <option value="80mm">حراري 80mm رول كاشير (بلوتوث / شبكة)</option>
+                    <option value="58mm">حراري 58mm رول صغير</option>
+                    <option value="A5">ورق عادي A5 (نصف ورقة)</option>
+                    <option value="A4">ورق عادي A4 (ورقة كاملة)</option>
+                </select>
+
+                <label>عنوان IP طابعة الشبكة الحرارية (Network Thermal IP / اختياري)</label>
+                <input type="text" id="netPrinterIp" placeholder="مثال: 192.168.1.200:9100" onchange="savePrinterPrefs()" />
+
+                <label>
+                    <input type="checkbox" id="chkAutoPrintWeb" onchange="savePrinterPrefs()" checked />
+                    تشغيل نافذة الطباعة تلقائياً فور حفظ الفاتورة على الهاتف
+                </label>
+
+                <button type="button" class="submit-btn" style="background:#0D7857;" onclick="testWebPrint()">🖨️ تجربة طباعة إيصال اختباري الآن</button>
+            </div>
+        </div>
     </div>
+
+    <!-- مساحة الطباعة المخفية المجهزة للفواتير -->
+    <div id="printArea"></div>
 
     <script>
     const AGENCY_KEY = "${esc(key)}";
@@ -1357,6 +1411,66 @@ th { background: #5A0817; color: white; }
         document.getElementById('posTotalTxt').textContent = Math.round(tot).toLocaleString() + ' ج';
     }
 
+    function updateSettlePreview() {
+        const sel = document.getElementById('settleLoadSelect');
+        const box = document.getElementById('settlePreviewBox');
+        if (!sel.value) { box.style.display = 'none'; return; }
+        const opt = sel.options[sel.selectedIndex];
+        document.getElementById('settleSuppTxt').textContent = opt.getAttribute('data-supplier');
+        document.getElementById('settleFreightTxt').textContent = Number(opt.getAttribute('data-freight') || 0).toLocaleString() + ' ج';
+        document.getElementById('settleCommTxt').textContent = opt.getAttribute('data-comm') + '%';
+        box.style.display = 'block';
+    }
+
+    function savePrinterPrefs() {
+        const pSize = document.getElementById('webPrinterSize').value;
+        const pIp = document.getElementById('netPrinterIp').value;
+        const pAuto = document.getElementById('chkAutoPrintWeb').checked;
+        localStorage.setItem('mizan_print_size', pSize);
+        localStorage.setItem('mizan_print_ip', pIp);
+        localStorage.setItem('mizan_print_auto', pAuto ? '1' : '0');
+    }
+
+    function loadPrinterPrefs() {
+        const pSize = localStorage.getItem('mizan_print_size') || '80mm';
+        const pIp = localStorage.getItem('mizan_print_ip') || '';
+        const pAuto = localStorage.getItem('mizan_print_auto') !== '0';
+        if (document.getElementById('webPrinterSize')) document.getElementById('webPrinterSize').value = pSize;
+        if (document.getElementById('netPrinterIp')) document.getElementById('netPrinterIp').value = pIp;
+        if (document.getElementById('chkAutoPrintWeb')) document.getElementById('chkAutoPrintWeb').checked = pAuto;
+    }
+    setTimeout(loadPrinterPrefs, 100);
+
+    function testWebPrint() {
+        printInvoiceReceipt({
+            agencyName: "${esc(data.agency_name)}",
+            invoiceNo: "SRV-TEST-001",
+            customer: "عميل تجريبي",
+            item: "طماطم فاخرة",
+            qty: 50,
+            weight: 125.0,
+            price: 15.0,
+            total: 1875.0,
+            paid: 1875.0,
+            remaining: 0
+        });
+    }
+
+    function printInvoiceReceipt(inv) {
+        const area = document.getElementById('printArea');
+        area.innerHTML = \`
+            <div style="font-family:Tahoma,sans-serif;width:280px;margin:auto;text-align:right;font-size:12px;padding:10px;">
+                <h3 style="text-align:center;margin:0 0 5px 0;">\${inv.agencyName}</h3>
+                <div style="text-align:center;font-size:11px;border-bottom:1px dashed #000;padding-bottom:5px;">فاتورة مبيعات #\${inv.invoiceNo}</div>
+                <div style="margin:6px 0;">العميل: \${inv.customer}</div>
+                <div style="margin:6px 0;">الصنف: \${inv.item} (\${inv.qty}ق / \${inv.weight}ك @ \${inv.price}ج)</div>
+                <div style="font-weight:bold;font-size:14px;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:5px 0;">الإجمالي: \${inv.total.toLocaleString()} جنيه</div>
+                <div style="text-align:center;margin-top:10px;font-size:10px;">منظومة ميزان السحابية</div>
+            </div>
+        \`;
+        window.print();
+    }
+
     async function sendAction(action_type, data) {
         if (!currentUser || !currentUser.full_name) {
             alert('انتهت الجلسة، يرجى تسجيل الدخول مجدداً.');
@@ -1423,7 +1537,24 @@ th { background: #5A0817; color: white; }
         };
 
         const ok = await sendAction('SALE_INVOICE', data);
-        if (ok) { f.reset(); calcPosTotal(); }
+        if (ok) {
+            if (document.getElementById('chkAutoPrintWeb')?.checked) {
+                printInvoiceReceipt({
+                    agencyName: "${esc(data.agency_name)}",
+                    invoiceNo: "SRV-AUTO",
+                    customer: f.Customer.value,
+                    item: f.Item.value,
+                    qty: q,
+                    weight: w,
+                    price: p,
+                    total: val,
+                    paid: isCash ? val : 0,
+                    remaining: isCash ? 0 : val
+                });
+            }
+            f.reset();
+            calcPosTotal();
+        }
     }
 
     async function handleLoadSubmit(e) {
