@@ -181,6 +181,116 @@ const shell = (title, body, script = '') => `<!DOCTYPE html>
 <body>${body}${script ? `<script>${script}</script>` : ''}</body>
 </html>`;
 
+
+// ================= نظام الاشتراكات =================
+const DAY_MS = 86400000;
+const TRIAL_DAYS = Number(process.env.TRIAL_DAYS || 14);
+const GRACE_DAYS = Number(process.env.GRACE_DAYS || 0);
+const SUB_DAYS = 30;
+
+const safeEq = (a, b) => {
+    const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+    return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
+const isAdmin = req => {
+    const t = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    return !!process.env.ADMIN_TOKEN && safeEq(t, process.env.ADMIN_TOKEN);
+};
+
+// يرجع { ok } : هل الوكالة مسموح لها بالعمل الآن؟
+const gateAgency = async (key) => {
+    if (!key) return { ok: true };
+    const owner = await redis.get(`keyidx:${key}`);
+    if (!owner) return { ok: true };
+    if (owner !== 'desktop_client') {
+        const u = await redis.get(`user:${owner}`);
+        if (u && u.disabled) return { ok: false, disabled: true };
+    }
+    let sub = await redis.get(`sub:${key}`);
+    if (!sub) { // أول مرة: نبدأ فترة تجريبية (يشمل العملاء القدام)
+        sub = { status: 'active', trial: true, created_at: new Date().toISOString(),
+                paid_until: new Date(Date.now() + TRIAL_DAYS * DAY_MS).toISOString() };
+        await redis.set(`sub:${key}`, sub, { nx: true });
+    }
+    const until = new Date(sub.paid_until).getTime() + GRACE_DAYS * DAY_MS;
+    const ok = sub.status !== 'locked' && Date.now() <= until;
+    return { ok, sub };
+};
+
+const payRequired = (res, key) => sendJson(res, 402, {
+    success: false, code: 'SUBSCRIPTION_REQUIRED',
+    message: 'انتهى الاشتراك. برجاء التجديد لإعادة تشغيل الخدمة.',
+    pay_url: `/pay?key=${encodeURIComponent(key)}`
+});
+const redirect = (res, url) => { res.statusCode = 302; res.setHeader('Location', url); res.end(); };
+
+const extendSub = async (key, days, extra = {}) => {
+    const cur = (await redis.get(`sub:${key}`)) || {};
+    const base = Math.max(Date.now(), cur.paid_until ? new Date(cur.paid_until).getTime() : 0);
+    const sub = { ...cur, ...extra, status: 'active', trial: false,
+                  paid_until: new Date(base + days * DAY_MS).toISOString() };
+    await redis.set(`sub:${key}`, sub);
+    return sub;
+};
+
+const resolveKey = async (b) => {
+    if (b.agency_key) return String(b.agency_key).trim();
+    if (b.username) {
+        const u = await redis.get(`user:${String(b.username).trim().toLowerCase()}`);
+        return u ? u.agency_key : null;
+    }
+    return null;
+};
+
+const ADMIN_PAGE = [
+    '<div class="box" style="max-width:1050px">',
+    '<h2 style="text-align:center">🛠️ لوحة تحكم ميزان</h2>',
+    '<input id="tk" type="password" placeholder="ADMIN_TOKEN" style="width:100%;box-sizing:border-box;margin:6px 0;padding:10px">',
+    '<div style="display:flex;gap:8px;align-items:center;margin:6px 0">',
+    '<button class="btn" style="width:auto;padding:10px 22px" onclick="load()">🔄 تحميل القائمة</button>',
+    '<label style="font-size:13px">عدد أيام التمديد:</label>',
+    '<input id="dy" type="number" value="30" style="width:80px;padding:8px">',
+    '<input id="q" placeholder="بحث..." oninput="render()" style="flex:1;padding:8px">',
+    '</div>',
+    '<div id="msg" style="color:#D4AF37;min-height:22px;margin:6px 0"></div>',
+    '<div style="overflow-x:auto"><table id="tb" style="width:100%;border-collapse:collapse;font-size:13px"></table></div>',
+    '</div>'
+].join('');
+
+const ADMIN_SCRIPT = [
+    'var USERS=[];',
+    'var LBL={active:"نشط",trial:"تجريبي",expired:"منتهي",locked:"مقفول",disabled:"معطّل",pending:"غير مفعّل"};',
+    'var CLR={active:"#22c55e",trial:"#38bdf8",expired:"#f59e0b",locked:"#ef4444",disabled:"#ef4444",pending:"#9ca3af"};',
+    'function hdr(){return {"Content-Type":"application/json","Authorization":"Bearer "+document.getElementById("tk").value};}',
+    'function msg(t){document.getElementById("msg").textContent=t;}',
+    'async function load(){',
+    ' sessionStorage.setItem("tk",document.getElementById("tk").value);',
+    ' var r=await fetch("/api/admin/list",{headers:hdr()});',
+    ' if(r.status!==200){msg("رمز الدخول غير صحيح");return;}',
+    ' USERS=(await r.json()).users;msg("تم التحميل ("+USERS.length+" حساب)");render();}',
+    'async function act(a,u){',
+    ' if((a==="lock"||a==="disable")&&!confirm("تأكيد: "+a+" للمستخدم "+u+" ؟"))return;',
+    ' var r=await fetch("/api/admin/subscription",{method:"POST",headers:hdr(),body:JSON.stringify({action:a,username:u,days:Number(document.getElementById("dy").value)||30})});',
+    ' var j=await r.json();msg(j.success?"✔ تم":("✖ "+j.message));load();}',
+    'function cell(tr,txt,color){var td=document.createElement("td");td.textContent=txt;td.style.cssText="padding:7px;border-bottom:1px solid #5A0817";if(color)td.style.color=color;tr.appendChild(td);return td;}',
+    'function btn(td,txt,a,u){var b=document.createElement("button");b.textContent=txt;b.style.cssText="width:auto;padding:5px 9px;margin:2px;font-size:12px";b.onclick=function(){act(a,u);};td.appendChild(b);}',
+    'function render(){',
+    ' var q=document.getElementById("q").value.trim().toLowerCase();var tb=document.getElementById("tb");tb.textContent="";',
+    ' var h=document.createElement("tr");["المستخدم","الوكالة","البريد","الحالة","ينتهي في","إجراءات"].forEach(function(t){var th=document.createElement("th");th.textContent=t;th.style.cssText="padding:7px;text-align:right;color:#D4AF37";h.appendChild(th);});tb.appendChild(h);',
+    ' USERS.filter(function(u){return !q||(u.username+" "+u.agency_name+" "+u.email).toLowerCase().indexOf(q)>-1;}).forEach(function(u){',
+    '  var tr=document.createElement("tr");cell(tr,u.username);cell(tr,u.agency_name);cell(tr,u.email);',
+    '  cell(tr,LBL[u.state]||u.state,CLR[u.state]);cell(tr,u.paid_until?u.paid_until.slice(0,10):"-");',
+    '  var td=cell(tr,"");',
+    '  if(u.state!=="pending"){',
+    '   btn(td,"➕ تمديد","extend",u.username);',
+    '   if(u.state==="locked"||u.state==="expired")btn(td,"🔓 فتح","unlock",u.username);else if(u.state!=="disabled")btn(td,"🔒 قفل","lock",u.username);',
+    '   if(u.state==="disabled")btn(td,"✅ تفعيل الحساب","enable",u.username);else btn(td,"⛔ تعطيل الحساب","disable",u.username);',
+    '  }',
+    '  tb.appendChild(tr);});}',
+    'document.getElementById("tk").value=sessionStorage.getItem("tk")||"";',
+    'if(document.getElementById("tk").value)load();'
+].join('\n');
+
 module.exports = async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -493,6 +603,7 @@ th { background: #5A0817; color: white; }
             if (!user || hash !== user.password_hash) {
                 return sendJson(res, 401, { success: false, message: 'بيانات الدخول غير صحيحة.' });
             }
+            if (user.disabled) return sendJson(res, 403, { success: false, message: 'هذا الحساب معطّل. تواصل مع الدعم.' });
 
             return sendJson(res, 200, {
                 success: true,
@@ -561,6 +672,7 @@ th { background: #5A0817; color: white; }
             const agency_key = String(query.key || req.headers['x-api-key'] || '').trim();
             if (!agency_key) return sendJson(res, 400, { success: false, message: "كود الوكالة مطلوب." });
 
+
             const queueKey = `orders_queue:${agency_key}`;
             const queuedOrders = await redis.get(queueKey) || [];
             if (queuedOrders.length > 0) await redis.del(queueKey);
@@ -574,6 +686,7 @@ th { background: #5A0817; color: white; }
             const agency_key = String(b.agency_key || '').trim();
             const username = String(b.username || '').trim();
             const password = String(b.password || '');
+            if (!(await gateAgency(agency_key)).ok) return payRequired(res, agency_key);
 
             const data = await redis.get(`agency:${agency_key}`);
             const owner = await redis.get(`keyidx:${agency_key}`);
@@ -623,6 +736,7 @@ th { background: #5A0817; color: white; }
             let b = await readJson(req);
             const { agency_key, action_type, user_name, data, source } = b;
             if (!agency_key || !action_type || !data) return sendJson(res, 400, { success: false, message: "بيانات ناقصة." });
+            if (!(await gateAgency(agency_key)).ok) return payRequired(res, agency_key);
 
             const queueKey = `orders_queue:${agency_key}`;
             const queuedOrders = await redis.get(queueKey) || [];
@@ -771,8 +885,101 @@ th { background: #5A0817; color: white; }
         }
 
         // 13. بوابة الويب السحابية الشاملة لكافة الأقسام الـ 16
+        // ---------- صفحة الدفع ----------
+        if (pathname === '/pay') {
+            const key = String(query.key || '').trim();
+            const g = await gateAgency(key);
+            if (g.ok) return redirect(res, `/app?key=${encodeURIComponent(key)}`);
+            if (g.disabled) return sendHtml(res, 403, shell('حساب معطّل | ميزان', `
+                <div class="box" style="text-align:center"><h2>⛔ الحساب معطّل</h2>
+                <p style="color:#C8B8B5;line-height:1.9">تواصل مع الدعم${process.env.PAY_WHATSAPP ? ` على واتساب: <b>${esc(process.env.PAY_WHATSAPP)}</b>` : ''}.</p></div>`));
+            const locked = g.sub && g.sub.status === 'locked';
+            const methods = [
+                ['📲 إنستا باي (InstaPay)', process.env.PAY_INSTAPAY],
+                ['📱 فودافون كاش', process.env.PAY_VODAFONE],
+                ['🏦 تحويل بنكي', process.env.PAY_BANK]
+            ].filter(m => m[1]).map(m => `<div style="background:#1A0206;border-radius:8px;padding:10px;margin:8px 0;text-align:right"><b>${m[0]}</b><br><span style="direction:ltr;display:inline-block;color:#D4AF37;word-break:break-all">${esc(m[1])}</span></div>`).join('');
+            return sendHtml(res, 402, shell('تجديد الاشتراك | ميزان', `
+                <div class="box" style="text-align:center">
+                    <h2>🔒 ${locked ? 'الخدمة متوقفة' : 'انتهى الاشتراك'}</h2>
+                    <p style="color:#C8B8B5;line-height:1.9">لاستكمال استخدام النسخة السحابية (الويب والموبايل) برجاء تجديد الاشتراك الشهري${process.env.SUB_PRICE ? ` (<b>${esc(process.env.SUB_PRICE)}</b>)` : ''}.<br><small>برنامج الديسك توب مجاني ويعمل بدون توقف.</small></p>
+                    ${methods}
+                    ${process.env.SUB_PAY_URL ? `<a class="btn" href="${esc(process.env.SUB_PAY_URL)}">💳 الدفع بالفيزا / ماستر كارد</a>` : ''}
+                    <p style="font-size:13px;line-height:1.9">اكتب <b>كود الوكالة</b> عند الدفع، وبعد التحويل ابعت الإيصال${process.env.PAY_WHATSAPP ? ` على واتساب <b>${esc(process.env.PAY_WHATSAPP)}</b>` : ''}:<br><b style="color:#D4AF37;direction:ltr;display:inline-block;word-break:break-all">${esc(key)}</b></p>
+                    <button class="btn small" onclick="location.reload()">🔄 دفعت؟ اضغط للتحديث</button>
+                </div>`));
+        }
+
+        // ---------- إشعار الدفع التلقائي (Webhook) ----------
+        if (pathname === '/api/payment/webhook' && req.method === 'POST') {
+            if (!process.env.PAY_WEBHOOK_SECRET || !safeEq(req.headers['x-webhook-secret'] || '', process.env.PAY_WEBHOOK_SECRET))
+                return sendJson(res, 401, { success: false, message: 'unauthorized' });
+            const b = await readJson(req);
+            const key = await resolveKey(b);
+            if (!key) return sendJson(res, 404, { success: false, message: 'الوكالة غير موجودة.' });
+            if (b.payment_id) { // منع تكرار نفس العملية
+                const first = await redis.set(`pay:${b.payment_id}`, 1, { nx: true, ex: 60 * 60 * 24 * 90 });
+                if (!first) return sendJson(res, 200, { success: true, duplicate: true });
+            }
+            const months = Math.max(1, Math.min(12, Number(b.months) || 1));
+            const sub = await extendSub(key, SUB_DAYS * months, { last_payment: new Date().toISOString(), last_payment_id: b.payment_id || null });
+            return sendJson(res, 200, { success: true, paid_until: sub.paid_until });
+        }
+
+        // ---------- التحكم اليدوي (أنت فقط) ----------
+        if (pathname === '/admin' && req.method === 'GET')
+            return sendHtml(res, 200, shell('اشتراكات | ميزان', ADMIN_PAGE, ADMIN_SCRIPT));
+
+        if (pathname === '/api/admin/list' && req.method === 'GET') {
+            if (!isAdmin(req)) return sendJson(res, 401, { success: false, message: 'unauthorized' });
+            const names = await redis.keys('user:*');
+            const users = [];
+            for (const k of names) {
+                const u = await redis.get(k);
+                if (!u) continue;
+                const sub = await redis.get(`sub:${u.agency_key}`);
+                const expired = sub && new Date(sub.paid_until).getTime() + GRACE_DAYS * DAY_MS < Date.now();
+                const state = !u.verified ? 'pending' : u.disabled ? 'disabled'
+                    : (sub && sub.status === 'locked') ? 'locked' : expired ? 'expired'
+                    : (!sub || sub.trial) ? 'trial' : 'active';
+                users.push({ username: u.username, agency_name: u.agency_name, email: u.email, phone: u.phone,
+                             created_at: u.created_at, state, paid_until: sub ? sub.paid_until : null });
+            }
+            users.sort((x, y) => String(y.created_at).localeCompare(String(x.created_at)));
+            return sendJson(res, 200, { success: true, users });
+        }
+
+        if (pathname === '/api/admin/subscription' && req.method === 'POST') {
+            if (!isAdmin(req)) return sendJson(res, 401, { success: false, message: 'unauthorized' });
+            const b = await readJson(req);
+            const key = await resolveKey(b);
+            if (!key) return sendJson(res, 404, { success: false, message: 'الوكالة غير موجودة.' });
+            const days = Math.max(1, Math.min(3650, Number(b.days) || SUB_DAYS));
+            let sub = await redis.get(`sub:${key}`);
+            if (b.action === 'disable' || b.action === 'enable') {
+                const uname = await redis.get(`keyidx:${key}`);
+                const u = uname ? await redis.get(`user:${uname}`) : null;
+                if (!u || !u.verified) return sendJson(res, 404, { success: false, message: 'الحساب غير موجود أو غير مفعّل.' });
+                await redis.set(`user:${uname}`, { ...u, disabled: b.action === 'disable' });
+                return sendJson(res, 200, { success: true, agency_key: key, disabled: b.action === 'disable' });
+            }
+            if (b.action === 'lock') {
+                sub = { ...(sub || {}), status: 'locked', locked_at: new Date().toISOString() };
+                await redis.set(`sub:${key}`, sub);
+            } else if (b.action === 'unlock') {
+                const until = sub && sub.paid_until ? new Date(sub.paid_until).getTime() : 0;
+                const expired = !(until > Date.now());
+                sub = expired ? await extendSub(key, days, { unlocked_by: 'admin' })
+                              : await extendSub(key, 0, { unlocked_by: 'admin' });
+            } else if (b.action === 'extend') {
+                sub = await extendSub(key, days, { unlocked_by: 'admin' });
+            }
+            return sendJson(res, 200, { success: true, agency_key: key, subscription: sub || null });
+        }
+
         if (pathname === '/app') {
             const key = String(query.key || '').trim();
+            if (!(await gateAgency(key)).ok) return redirect(res, `/pay?key=${encodeURIComponent(key)}`);
             const data = key ? await redis.get(`agency:${key}`) : null;
 
             if (!data) {
@@ -1698,6 +1905,7 @@ th { background: #5A0817; color: white; }
                     data
                 })
             });
+            if (r.status === 402) { location.href = '/pay?key=' + encodeURIComponent(AGENCY_KEY); return false; }
             const j = await r.json();
             if (j.success) {
                 alert(j.message);
