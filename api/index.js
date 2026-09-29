@@ -1,5 +1,6 @@
 const { Redis } = require('@upstash/redis');
 const crypto = require('crypto');
+const nodemailer = require('nodemailer');
 
 const redis = new Redis({
     url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
@@ -12,7 +13,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 const versionInfo = {
     latest_version: "2.1.0",
     download_url: "https://example.com/downloads/Mizan_Agency_Update.exe",
-    changelog: "الواجهة السحابية الشاملة لكافة أقسام وخدمات الوكالة الـ 16"
+    changelog: "Ø§Ù„Ù…Ù†Ø¸ÙˆÙ…Ø© Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠØ© Ø§Ù„Ù…ÙˆØ­Ø¯Ø© Ø§Ù„Ù…ØªÙˆØ§ÙÙ‚Ø© 100% Ù…Ø¹ Ø£Ø¬Ù‡Ø²Ø© Ø§Ù„ÙƒÙ…Ø¨ÙŠÙˆØªØ± ÙˆÙ…ÙˆØ§Ø²ÙŠÙ† Ø§Ù„Ø£Ø³ÙˆØ§Ù‚"
 };
 
 const sendJson = (res, status, obj) => {
@@ -28,10 +29,13 @@ const sendHtml = (res, status, body) => {
 };
 
 async function readJson(req) {
+    if (req.body) {
+        return typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    }
     let s = '';
     for await (const chunk of req) {
         s += chunk;
-        if (s.length > 20_000_000) throw new Error('حجم البيانات كبير جداً');
+        if (s.length > 25_000_000) throw new Error('حجم البيانات كبير جداً');
     }
     return JSON.parse(s || '{}');
 }
@@ -85,12 +89,12 @@ const maskFor = u => (u.verify_channel === 'whatsapp' ? maskPhone(u.phone) : mas
 const otpHash = (salt, code) => crypto.createHmac('sha256', salt).update(String(code)).digest('hex');
 
 async function sendEmail(to, agencyName, code) {
-    const subject = 'كود التحقق من حسابك في ميزان';
-    const text = `كود التحقق الخاص بك: ${code}\nصالح لمدة 10 دقائق.`;
+    const subject = 'ÙƒÙˆØ¯ Ø§Ù„ØªØ­Ù‚Ù‚ Ù…Ù† Ø­Ø³Ø§Ø¨Ùƒ ÙÙŠ Ù…ÙŠØ²Ø§Ù†';
+    const text = `ÙƒÙˆØ¯ Ø§Ù„ØªØ­Ù‚Ù‚ Ø§Ù„Ø®Ø§Øµ Ø¨Ùƒ: ${code}\nØµØ§Ù„Ø­ Ù„Ù…Ø¯Ø© 10 Ø¯Ù‚Ø§Ø¦Ù‚.`;
     const html = `<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;font-size:16px">
-        <p>مرحباً، لتفعيل حساب وكالة <b>${esc(agencyName)}</b> في ميزان استخدم الكود التالي:</p>
+        <p>Ù…Ø±Ø­Ø¨Ø§Ù‹ØŒ Ù„ØªÙØ¹ÙŠÙ„ Ø­Ø³Ø§Ø¨ ÙˆÙƒØ§Ù„Ø© <b>${esc(agencyName)}</b> ÙÙŠ Ù…ÙŠØ²Ø§Ù† Ø§Ø³ØªØ®Ø¯Ù… Ø§Ù„ÙƒÙˆØ¯ Ø§Ù„ØªØ§Ù„ÙŠ:</p>
         <p style="font-size:32px;letter-spacing:6px;font-weight:bold">${code}</p>
-        <p style="color:#666">صالح لمدة 10 دقائق.</p></div>`;
+        <p style="color:#666">ØµØ§Ù„Ø­ Ù„Ù…Ø¯Ø© 10 Ø¯Ù‚Ø§Ø¦Ù‚.</p></div>`;
 
     if (process.env.RESEND_API_KEY) {
         const r = await fetch('https://api.resend.com/emails', {
@@ -101,13 +105,12 @@ async function sendEmail(to, agencyName, code) {
         if (!r.ok) throw new Error(`Resend ${r.status}: ${await r.text()}`);
         return;
     }
-    const nodemailer = require('nodemailer');
     const transporter = nodemailer.createTransport({
         service: 'gmail',
         auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
     });
     await transporter.sendMail({
-        from: process.env.MAIL_FROM || `"ميزان" <${process.env.SMTP_USER}>`,
+        from: process.env.MAIL_FROM || `"Ù…ÙŠØ²Ø§Ù†" <${process.env.SMTP_USER}>`,
         to, subject, text, html
     });
 }
@@ -157,7 +160,7 @@ const originOf = req => `https://${req.headers['x-forwarded-host'] || req.header
 const STYLE = `
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Aref+Ruqaa:wght@700&display=swap');
 body { font-family: 'Cairo', -apple-system, Tahoma, sans-serif; background: #200308; color: #FAF4F1; padding: 12px; text-align: center; margin: 0; }
-.box { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 14px; max-width: 450px; margin: 25px auto; padding: 25px; text-align: right; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+.box { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 14px; max-width: 480px; margin: 25px auto; padding: 25px; text-align: right; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
 h2 { color: #D4AF37; text-align: center; margin-top: 0; }
 label { font-size: 13px; color: #C8B8B5; display: block; margin-top: 10px; font-weight: bold; }
 input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 4px; border-radius: 6px; border: 1.2px solid #D4AF37; font-size: 14px; background: #FAF4F1; color: #1E1E1E; font-family: inherit; font-weight: 600; }
@@ -194,46 +197,126 @@ module.exports = async (req, res) => {
 
     try {
         if (pathname === '/' || pathname === '') {
-            return sendHtml(res, 200, shell('خادم ميزان السحابي', `
+            return sendHtml(res, 200, shell('Ø®Ø§Ø¯Ù… Ù…ÙŠØ²Ø§Ù† Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ', `
                 <div class="box" style="text-align:center">
-                    <h2>🚀 خادم ميزان السحابي المتكامل</h2>
-                    <p style="color:#C8B8B5;">إدارة ومتابعة ومزامنة كافة عمليات الوكالة لحظة بلحظة.</p>
-                    <a class="btn" href="/login">🔑 تسجيل الدخول السحابي</a>
-                    <a class="btn small" href="/register">📝 إنشاء حساب وكالة جديد</a>
+                    <h2>ðŸš€ Ø®Ø§Ø¯Ù… Ù…ÙŠØ²Ø§Ù† Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ Ø§Ù„Ù…ÙˆØ­Ø¯</h2>
+                    <p style="color:#C8B8B5;">Ø¥Ø¯Ø§Ø±Ø© ÙˆÙ…ØªØ§Ø¨Ø¹Ø© ÙˆÙ…Ø²Ø§Ù…Ù†Ø© ÙƒØ§ÙØ© Ø¹Ù…Ù„ÙŠØ§Øª Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ù„Ø­Ø¸Ø© Ø¨Ù„Ø­Ø¸Ø© Ù…Ø¹ Ø£Ø¬Ù‡Ø²Ø© Ø§Ù„ÙƒÙ…Ø¨ÙŠÙˆØªØ± ÙˆØ§Ù„Ù…ÙˆØ§Ø²ÙŠÙ†.</p>
+                    <a class="btn" href="/login">ðŸ”‘ ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø¯Ø®ÙˆÙ„ Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ</a>
+                    <a class="btn small" href="/register">ðŸ“ Ø¥Ù†Ø´Ø§Ø¡ Ø­Ø³Ø§Ø¨ ÙˆÙƒØ§Ù„Ø© Ø¬Ø¯ÙŠØ¯</a>
                 </div>`));
+        }
+
+        // Ù…Ø³Ø§Ø± Ø§Ø³ØªØ¹Ø±Ø§Ø¶ Ø§Ù„ÙØ§ØªÙˆØ±Ø© Ø§Ù„Ø¥Ù„ÙƒØªØ±ÙˆÙ†ÙŠØ© Ø¹Ø¨Ø± Ù…Ø³Ø­ ÙƒÙˆØ¯ Ø§Ù„Ù€ QR
+        if (pathname === '/invoice' || pathname === '/api/invoice') {
+            const invNo = String(query.id || query.inv || '').trim();
+            const key = String(query.key || '').trim();
+
+            let targetAgencyData = null;
+            if (key) {
+                targetAgencyData = await redis.get(`agency:${key}`);
+            } else {
+                // Ø§Ù„Ø¨Ø­Ø« ÙÙŠ Ø§Ù„ÙˆÙƒØ§Ù„Ø§Øª Ø§Ù„Ù†Ø´Ø·Ø© Ø¹Ù† Ø±Ù‚Ù… Ø§Ù„ÙØ§ØªÙˆØ±Ø©
+                const keys = await redis.keys('agency:*');
+                for (const k of keys.slice(0, 20)) {
+                    const d = await redis.get(k);
+                    if (d && Array.isArray(d.recent_sales) && d.recent_sales.some(s => String(s.InvoiceNo || s.invoiceNo) === invNo)) {
+                        targetAgencyData = d;
+                        break;
+                    }
+                }
+            }
+
+            const sales = targetAgencyData && Array.isArray(targetAgencyData.recent_sales)
+                ? targetAgencyData.recent_sales.filter(s => String(s.InvoiceNo || s.invoiceNo) === invNo)
+                : [];
+
+            if (!sales || sales.length === 0) {
+                return sendHtml(res, 404, shell('ÙØ§ØªÙˆØ±Ø© ØºÙŠØ± Ù…ÙˆØ¬ÙˆØ¯Ø©', `
+                    <div class="box" style="text-align:center;">
+                        <h2>âš ï¸ Ù„Ù… ÙŠØªÙ… Ø§Ù„Ø¹Ø«ÙˆØ± Ø¹Ù„Ù‰ Ø§Ù„ÙØ§ØªÙˆØ±Ø©</h2>
+                        <p style="color:#C8B8B5;">Ø±Ù‚Ù… Ø§Ù„ÙØ§ØªÙˆØ±Ø© Ø§Ù„Ù…Ø·Ù„ÙˆØ¨Ø© [${esc(invNo)}] ØºÙŠØ± Ù…Ø³Ø¬Ù„ ÙÙŠ Ø§Ù„Ø³ÙŠØ±ÙØ± Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ Ø£Ùˆ ØªÙ… Ø£Ø±Ø´ÙØªÙ‡.</p>
+                    </div>`));
+            }
+
+            const first = sales[0];
+            const totalVal = sales.reduce((acc, x) => acc + Number(x.Value || x.value || 0), 0);
+            const paidVal = Number(first.PaidAmount || first.paidAmount || 0);
+            const remVal = Math.max(0, totalVal - paidVal);
+
+            return sendHtml(res, 200, `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8"><title>ÙØ§ØªÙˆØ±Ø© Ø¥Ù„ÙƒØªØ±ÙˆÙ†ÙŠØ© Ù…Ø¹ØªÙ…Ø¯Ø© #${esc(invNo)}</title>
+<style>
+body { font-family: Tahoma, Cairo, sans-serif; background: #FAF4F1; padding: 20px; color: #1E1E1E; direction: rtl; }
+.card { background: #FFF; max-width: 480px; margin: auto; padding: 24px; border-radius: 12px; border: 1.5px solid #5A0817; box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
+h2 { color: #5A0817; text-align: center; margin-top: 0; }
+table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+th, td { padding: 8px; border-bottom: 1px solid #DDD; text-align: right; font-size: 13px; }
+th { background: #5A0817; color: white; }
+.tot { font-size: 17px; font-weight: bold; color: #0D7857; margin-top: 12px; text-align: left; }
+</style>
+</head>
+<body>
+<div class="card">
+    <h2>ðŸ¢ ${esc(targetAgencyData.agency_name || "ÙˆÙƒØ§Ù„Ø© Ù…ÙŠØ²Ø§Ù†")}</h2>
+    <div style="text-align:center;font-weight:bold;color:#5A0817;">ðŸ“„ ÙØ§ØªÙˆØ±Ø© Ù…Ø¨ÙŠØ¹Ø§Øª Ø¥Ù„ÙƒØªØ±ÙˆÙ†ÙŠØ© Ù…Ø¹ØªÙ…Ø¯Ø© #${esc(invNo)}</div>
+    <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">Ø§Ù„ØªØ§Ø±ÙŠØ®: ${esc(first.Date || first.date)} | Ø§Ù„Ø¹Ù…ÙŠÙ„: <b>${esc(first.Customer || first.customer)}</b></div>
+    <table>
+        <thead><tr><th>Ø§Ù„ØµÙ†Ù</th><th>Ø§Ù„Ø¹Ø¯Ø¯</th><th>Ø§Ù„ÙˆØ²Ù†</th><th>Ø§Ù„Ø³Ø¹Ø±</th><th>Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ</th></tr></thead>
+        <tbody>
+            ${sales.map(s => `<tr>
+                <td><b>${esc(s.Item || s.item)}</b></td>
+                <td>${Number(s.Qty || s.qty || 0).toLocaleString()} Ù‚</td>
+                <td>${Number(s.Weight || s.weight || 0).toLocaleString()} Ùƒ</td>
+                <td>${Number(s.Price || s.price || 0).toLocaleString()} Ø¬</td>
+                <td>${Number(s.Value || s.value || 0).toLocaleString()} Ø¬</td>
+            </tr>`).join('')}
+        </tbody>
+    </table>
+    <div class="tot">Ø§Ù„Ù…Ø¬Ù…ÙˆØ¹ Ø§Ù„ÙƒÙ„ÙŠ: ${totalVal.toLocaleString()} Ø¬Ù†ÙŠÙ‡</div>
+    <div style="margin-top:6px;font-size:13px;display:flex;justify-content:space-between;">
+        <span>Ø§Ù„Ù…Ø¯ÙÙˆØ¹: ${paidVal.toLocaleString()} Ø¬</span>
+        <span style="color:#DC2626;font-weight:bold;">Ø§Ù„Ù…ØªØ¨Ù‚ÙŠ: ${remVal.toLocaleString()} Ø¬</span>
+    </div>
+    <div style="margin-top:15px;text-align:center;font-size:11px;color:#888;border-top:1px dashed #CCC;padding-top:10px;">
+        âš–ï¸ Ù…Ù†Ø¸ÙˆÙ…Ø© Ù…ÙŠØ²Ø§Ù† Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠØ© Ù„Ø¥Ø¯Ø§Ø±Ø© ÙˆÙ…Ø­Ø§Ø³Ø¨Ø© Ø§Ù„ÙˆÙƒØ§Ù„Ø§Øª ÙˆØ§Ù„Ø£Ø³ÙˆØ§Ù‚
+    </div>
+</div>
+</body></html>`);
         }
 
         if (pathname === '/register' && req.method === 'GET') {
             const needCode = !!process.env.REGISTER_CODE;
             const em = emailEnabled(), wa = waEnabled();
-            return sendHtml(res, 200, shell('إنشاء حساب وكالة جديد | ميزان', `
+            return sendHtml(res, 200, shell('Ø¥Ù†Ø´Ø§Ø¡ Ø­Ø³Ø§Ø¨ ÙˆÙƒØ§Ù„Ø© Ø¬Ø¯ÙŠØ¯ | Ù…ÙŠØ²Ø§Ù†', `
                 <div class="box">
-                    <h2>📝 إنشاء حساب وكالة جديد</h2>
+                    <h2>ðŸ“ Ø¥Ù†Ø´Ø§Ø¡ Ø­Ø³Ø§Ø¨ ÙˆÙƒØ§Ù„Ø© Ø¬Ø¯ÙŠØ¯</h2>
                     <form id="f" autocomplete="off">
-                        <label>البريد الإلكتروني</label>
+                        <label>Ø§Ù„Ø¨Ø±ÙŠØ¯ Ø§Ù„Ø¥Ù„ÙƒØªØ±ÙˆÙ†ÙŠ</label>
                         <input type="email" name="email" required />
-                        <label>اسم الوكالة</label>
+                        <label>Ø§Ø³Ù… Ø§Ù„ÙˆÙƒØ§Ù„Ø©</label>
                         <input type="text" name="agency_name" maxlength="60" required />
-                        <label>اسم المستخدم الرئيسي</label>
+                        <label>Ø§Ø³Ù… Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… Ø§Ù„Ø±Ø¦ÙŠØ³ÙŠ</label>
                         <input type="text" name="username" pattern="[A-Za-z0-9_]{3,30}" minlength="3" maxlength="30" required />
-                        <label>كلمة المرور (8 أحرف على الأقل)</label>
+                        <label>ÙƒÙ„Ù…Ø© Ø§Ù„Ù…Ø±ÙˆØ± (8 Ø£Ø­Ø±Ù Ø¹Ù„Ù‰ Ø§Ù„Ø£Ù‚Ù„)</label>
                         <input type="password" name="password" minlength="8" required />
-                        <label>تأكيد كلمة المرور</label>
+                        <label>ØªØ£ÙƒÙŠØ¯ ÙƒÙ„Ù…Ø© Ø§Ù„Ù…Ø±ÙˆØ±</label>
                         <input type="password" name="password2" minlength="8" required />
-                        <label>استلام كود التحقق عن طريق</label>
+                        <label>Ø§Ø³ØªÙ„Ø§Ù… ÙƒÙˆØ¯ Ø§Ù„ØªØ­Ù‚Ù‚ Ø¹Ù† Ø·Ø±ÙŠÙ‚</label>
                         <div>
-                            ${em ? `<label class="radio"><input type="radio" name="channel" value="email" checked />البريد الإلكتروني</label>` : ''}
-                            ${wa ? `<label class="radio"><input type="radio" name="channel" value="whatsapp" ${em ? '' : 'checked'} />واتساب</label>` : ''}
+                            ${em ? `<label class="radio"><input type="radio" name="channel" value="email" checked />Ø§Ù„Ø¨Ø±ÙŠØ¯ Ø§Ù„Ø¥Ù„ÙƒØªØ±ÙˆÙ†ÙŠ</label>` : ''}
+                            ${wa ? `<label class="radio"><input type="radio" name="channel" value="whatsapp" ${em ? '' : 'checked'} />ÙˆØ§ØªØ³Ø§Ø¨</label>` : ''}
                         </div>
                         <div id="phoneBox" style="display:none">
-                            <label>رقم الواتساب (مثال: 01012345678)</label>
+                            <label>Ø±Ù‚Ù… Ø§Ù„ÙˆØ§ØªØ³Ø§Ø¨ (Ù…Ø«Ø§Ù„: 01012345678)</label>
                             <input type="tel" name="phone" />
                         </div>
-                        ${needCode ? `<label>كود التسجيل</label><input type="text" name="register_code" required />` : ''}
-                        <button type="submit">إنشاء الحساب وإرسال الكود</button>
+                        ${needCode ? `<label>ÙƒÙˆØ¯ Ø§Ù„ØªØ³Ø¬ÙŠÙ„</label><input type="text" name="register_code" required />` : ''}
+                        <button type="submit">Ø¥Ù†Ø´Ø§Ø¡ Ø§Ù„Ø­Ø³Ø§Ø¨ ÙˆØ¥Ø±Ø³Ø§Ù„ Ø§Ù„ÙƒÙˆØ¯</button>
                         <div class="msg" id="msg"></div>
                     </form>
-                    <a class="btn small" href="/login">لديك حساب؟ سجّل الدخول</a>
+                    <a class="btn small" href="/login">Ù„Ø¯ÙŠÙƒ Ø­Ø³Ø§Ø¨ØŸ Ø³Ø¬Ù‘Ù„ Ø§Ù„Ø¯Ø®ÙˆÙ„</a>
                 </div>`, `
                 var f=document.getElementById('f'),msg=document.getElementById('msg');
                 function sync(){
@@ -248,21 +331,21 @@ module.exports = async (req, res) => {
                   msg.textContent='';
                   var d={};
                   new FormData(f).forEach(function(v,k){d[k]=v;});
-                  if(d.password!==d.password2){msg.textContent='كلمتا المرور غير متطابقتين';return;}
+                  if(d.password!==d.password2){msg.textContent='ÙƒÙ„Ù…ØªØ§ Ø§Ù„Ù…Ø±ÙˆØ± ØºÙŠØ± Ù…ØªØ·Ø§Ø¨Ù‚ØªÙŠÙ†';return;}
                   var btn=f.querySelector('button');btn.disabled=true;
                   fetch('/api/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)})
                   .then(function(r){return r.json();})
                   .then(function(j){
                     btn.disabled=false;
-                    if(!j.success){msg.textContent=j.message||'حدث خطأ';return;}
+                    if(!j.success){msg.textContent=j.message||'Ø­Ø¯Ø« Ø®Ø·Ø£';return;}
                     window.location.href='/verify?u='+encodeURIComponent(j.username)+'&to='+encodeURIComponent(j.sent_to||'');
-                  }).catch(function(){btn.disabled=false;msg.textContent='تعذر الاتصال بالسيرفر';});
+                  }).catch(function(){btn.disabled=false;msg.textContent='ØªØ¹Ø°Ø± Ø§Ù„Ø§ØªØµØ§Ù„ Ø¨Ø§Ù„Ø³ÙŠØ±ÙØ±';});
                 });
                 `));
         }
 
         if (pathname === '/api/register' && req.method === 'POST') {
-            if (!(await rateLimit(req, 'register', 10))) return sendJson(res, 429, { success: false, message: 'محاولات كثيرة.' });
+            if (!(await rateLimit(req, 'register', 10))) return sendJson(res, 429, { success: false, message: 'Ù…Ø­Ø§ÙˆÙ„Ø§Øª ÙƒØ«ÙŠØ±Ø©.' });
             let b = await readJson(req);
             const email = String(b.email || '').trim().toLowerCase();
             const agencyName = String(b.agency_name || '').trim();
@@ -270,9 +353,9 @@ module.exports = async (req, res) => {
             const password = String(b.password || '');
             const channel = String(b.channel || 'email');
 
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return sendJson(res, 400, { success: false, message: 'البريد غير صحيح.' });
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) return sendJson(res, 400, { success: false, message: 'Ø§Ù„Ø¨Ø±ÙŠØ¯ ØºÙŠØ± ØµØ­ÙŠØ­.' });
             if (!agencyName || !/^[a-z0-9_]{3,30}$/.test(username) || password.length < 8)
-                return sendJson(res, 400, { success: false, message: 'البيانات غير مكتملة.' });
+                return sendJson(res, 400, { success: false, message: 'Ø§Ù„Ø¨ÙŠØ§Ù†Ø§Øª ØºÙŠØ± Ù…ÙƒØªÙ…Ù„Ø©.' });
 
             let phone = channel === 'whatsapp' ? normalizePhone(b.phone) : null;
             const salt = crypto.randomBytes(16).toString('hex');
@@ -285,41 +368,41 @@ module.exports = async (req, res) => {
             };
 
             const userOk = await redis.set(`user:${username}`, record, { nx: true, ex: UNVERIFIED_TTL });
-            if (!userOk) return sendJson(res, 409, { success: false, message: 'اسم المستخدم مسجل مسبقاً.' });
+            if (!userOk) return sendJson(res, 409, { success: false, message: 'Ø§Ø³Ù… Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… Ù…Ø³Ø¬Ù„ Ù…Ø³Ø¨Ù‚Ø§Ù‹.' });
             await redis.set(`email:${email}`, username, { nx: true, ex: UNVERIFIED_TTL });
 
             try { await issueCode(record); }
-            catch { await dropAccount(record); return sendJson(res, 502, { success: false, message: 'تعذر إرسال كود التحقق.' }); }
+            catch { await dropAccount(record); return sendJson(res, 502, { success: false, message: 'ØªØ¹Ø°Ø± Ø¥Ø±Ø³Ø§Ù„ ÙƒÙˆØ¯ Ø§Ù„ØªØ­Ù‚Ù‚.' }); }
 
             return sendJson(res, 200, { success: true, need_verify: true, username, sent_to: maskFor(record) });
         }
 
         if (pathname === '/verify' && req.method === 'GET') {
-            return sendHtml(res, 200, shell('تأكيد الحساب | ميزان', `
+            return sendHtml(res, 200, shell('ØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø­Ø³Ø§Ø¨ | Ù…ÙŠØ²Ø§Ù†', `
                 <div class="box" id="formBox">
-                    <h2>📩 تأكيد تفعيل الحساب</h2>
-                    <p class="note" id="info" style="text-align:center">أدخل كود التحقق المكوّن من 6 أرقام.</p>
+                    <h2>ðŸ“© ØªØ£ÙƒÙŠØ¯ ØªÙØ¹ÙŠÙ„ Ø§Ù„Ø­Ø³Ø§Ø¨</h2>
+                    <p class="note" id="info" style="text-align:center">Ø£Ø¯Ø®Ù„ ÙƒÙˆØ¯ Ø§Ù„ØªØ­Ù‚Ù‚ Ø§Ù„Ù…ÙƒÙˆÙ‘Ù† Ù…Ù† 6 Ø£Ø±Ù‚Ø§Ù….</p>
                     <form id="f">
-                        <label>كود التحقق</label>
+                        <label>ÙƒÙˆØ¯ Ø§Ù„ØªØ­Ù‚Ù‚</label>
                         <input type="text" name="code" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" required autocomplete="one-time-code" dir="ltr" style="text-align:center;letter-spacing:6px;font-size:22px" />
-                        <button type="submit">تأكيد الحساب</button>
+                        <button type="submit">ØªØ£ÙƒÙŠØ¯ Ø§Ù„Ø­Ø³Ø§Ø¨</button>
                         <div class="msg" id="msg"></div>
                     </form>
-                    <button class="small" type="button" id="resend">🔁 إرسال كود جديد</button>
+                    <button class="small" type="button" id="resend">ðŸ” Ø¥Ø±Ø³Ø§Ù„ ÙƒÙˆØ¯ Ø¬Ø¯ÙŠØ¯</button>
                 </div>
                 <div class="box" id="resBox" style="display:none">
-                    <h2>✅ تم تفعيل حساب الوكالة بنجاح</h2>
-                    <label>الرابط السحابي للوكالة</label>
+                    <h2>âœ… ØªÙ… ØªÙØ¹ÙŠÙ„ Ø­Ø³Ø§Ø¨ Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ø¨Ù†Ø¬Ø§Ø­</h2>
+                    <label>Ø§Ù„Ø±Ø§Ø¨Ø· Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ Ù„Ù„ÙˆÙƒØ§Ù„Ø©</label>
                     <input type="text" id="link" readonly />
-                    <button class="small" type="button" onclick="copyFrom('link')">📋 نسخ الرابط</button>
-                    <label>كود ربط الوكالة</label>
+                    <button class="small" type="button" onclick="copyFrom('link')">ðŸ“‹ Ù†Ø³Ø® Ø§Ù„Ø±Ø§Ø¨Ø·</button>
+                    <label>ÙƒÙˆØ¯ Ø±Ø¨Ø· Ø§Ù„ÙˆÙƒØ§Ù„Ø©</label>
                     <input type="text" id="key" readonly />
-                    <button class="small" type="button" onclick="copyFrom('key')">📋 نسخ الكود</button>
-                    <a class="btn" id="openPortalBtn" href="#">🚀 فتح بوابة الوكالة السحابية</a>
+                    <button class="small" type="button" onclick="copyFrom('key')">ðŸ“‹ Ù†Ø³Ø® Ø§Ù„ÙƒÙˆØ¯</button>
+                    <a class="btn" id="openPortalBtn" href="#">ðŸš€ ÙØªØ­ Ø¨ÙˆØ§Ø¨Ø© Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠØ©</a>
                 </div>`, `
                 var q=new URLSearchParams(location.search),u=q.get('u')||'';
                 var f=document.getElementById('f'),msg=document.getElementById('msg'),info=document.getElementById('info');
-                if(q.get('to')){info.textContent='أرسلنا كود التحقق إلى: '+q.get('to');}
+                if(q.get('to')){info.textContent='Ø£Ø±Ø³Ù„Ù†Ø§ ÙƒÙˆØ¯ Ø§Ù„ØªØ­Ù‚Ù‚ Ø¥Ù„Ù‰: '+q.get('to');}
                 function show(text,ok){msg.style.color=ok?'#7fd6a8':'';msg.textContent=text;}
                 f.addEventListener('submit',function(e){
                   e.preventDefault();show('',false);
@@ -328,13 +411,13 @@ module.exports = async (req, res) => {
                   .then(function(r){return r.json();})
                   .then(function(j){
                     btn.disabled=false;
-                    if(!j.success){show(j.message||'حدث خطأ',false);return;}
+                    if(!j.success){show(j.message||'Ø­Ø¯Ø« Ø®Ø·Ø£',false);return;}
                     document.getElementById('formBox').style.display='none';
                     document.getElementById('resBox').style.display='block';
                     document.getElementById('link').value=j.link;
                     document.getElementById('key').value=j.agency_key;
                     document.getElementById('openPortalBtn').href=j.link;
-                  }).catch(function(){btn.disabled=false;show('تعذر الاتصال بالسيرفر',false);});
+                  }).catch(function(){btn.disabled=false;show('ØªØ¹Ø°Ø± Ø§Ù„Ø§ØªØµØ§Ù„ Ø¨Ø§Ù„Ø³ÙŠØ±ÙØ±',false);});
                 });
                 function copyFrom(id){var el=document.getElementById(id);el.select();if(navigator.clipboard){navigator.clipboard.writeText(el.value);}}
                 `));
@@ -346,14 +429,14 @@ module.exports = async (req, res) => {
             const code = String(b.code || '').trim();
             const user = await redis.get(`user:${username}`);
 
-            if (!user) return sendJson(res, 404, { success: false, message: 'الحساب غير موجود.' });
+            if (!user) return sendJson(res, 404, { success: false, message: 'Ø§Ù„Ø­Ø³Ø§Ø¨ ØºÙŠØ± Ù…ÙˆØ¬ÙˆØ¯.' });
             const otp = await redis.get(`otp:${username}`);
-            if (!otp || otp.expires < Date.now()) return sendJson(res, 400, { success: false, message: 'انتهت صلاحية الكود.' });
+            if (!otp || otp.expires < Date.now()) return sendJson(res, 400, { success: false, message: 'Ø§Ù†ØªÙ‡Øª ØµÙ„Ø§Ø­ÙŠØ© Ø§Ù„ÙƒÙˆØ¯.' });
 
             const given = Buffer.from(otpHash(user.salt, code));
             const real = Buffer.from(otp.hash);
             if (given.length !== real.length || !crypto.timingSafeEqual(given, real))
-                return sendJson(res, 400, { success: false, message: 'الكود غير صحيح.' });
+                return sendJson(res, 400, { success: false, message: 'Ø§Ù„ÙƒÙˆØ¯ ØºÙŠØ± ØµØ­ÙŠØ­.' });
 
             user.verified = true;
             user.verified_at = new Date().toISOString();
@@ -369,18 +452,18 @@ module.exports = async (req, res) => {
         }
 
         if (pathname === '/login' && req.method === 'GET') {
-            return sendHtml(res, 200, shell('تسجيل الدخول | ميزان', `
+            return sendHtml(res, 200, shell('ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø¯Ø®ÙˆÙ„ | Ù…ÙŠØ²Ø§Ù†', `
                 <div class="box">
-                    <h2>🔑 تسجيل الدخول السحابي</h2>
+                    <h2>ðŸ”‘ ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø¯Ø®ÙˆÙ„ Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ</h2>
                     <form id="f">
-                        <label>اسم المستخدم الرئيسي</label>
+                        <label>Ø§Ø³Ù… Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… Ø§Ù„Ø±Ø¦ÙŠØ³ÙŠ</label>
                         <input type="text" name="username" required autocomplete="username" />
-                        <label>كلمة المرور</label>
+                        <label>ÙƒÙ„Ù…Ø© Ø§Ù„Ù…Ø±ÙˆØ±</label>
                         <input type="password" name="password" required autocomplete="current-password" />
-                        <button type="submit">دخول</button>
+                        <button type="submit">Ø¯Ø®ÙˆÙ„</button>
                         <div class="msg" id="msg"></div>
                     </form>
-                    <a class="btn small" href="/register">ليس لديك حساب؟ أنشئ واحداً</a>
+                    <a class="btn small" href="/register">Ù„ÙŠØ³ Ù„Ø¯ÙŠÙƒ Ø­Ø³Ø§Ø¨ØŸ Ø£Ù†Ø´Ø¦ ÙˆØ§Ø­Ø¯Ø§Ù‹</a>
                 </div>`, `
                 var f=document.getElementById('f'),msg=document.getElementById('msg');
                 f.addEventListener('submit',function(e){
@@ -392,9 +475,9 @@ module.exports = async (req, res) => {
                   .then(function(r){return r.json();})
                   .then(function(j){
                     btn.disabled=false;
-                    if(!j.success){msg.textContent=j.message||'حدث خطأ';return;}
+                    if(!j.success){msg.textContent=j.message||'Ø­Ø¯Ø« Ø®Ø·Ø£';return;}
                     window.location.href=j.link;
-                  }).catch(function(){btn.disabled=false;msg.textContent='تعذر الاتصال بالسيرفر';});
+                  }).catch(function(){btn.disabled=false;msg.textContent='ØªØ¹Ø°Ø± Ø§Ù„Ø§ØªØµØ§Ù„ Ø¨Ø§Ù„Ø³ÙŠØ±ÙØ±';});
                 });
                 `));
         }
@@ -408,7 +491,7 @@ module.exports = async (req, res) => {
             const salt = user ? user.salt : 'x'.repeat(32);
             const hash = await hashPassword(password, salt);
             if (!user || hash !== user.password_hash) {
-                return sendJson(res, 401, { success: false, message: 'بيانات الدخول غير صحيحة.' });
+                return sendJson(res, 401, { success: false, message: 'Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯Ø®ÙˆÙ„ ØºÙŠØ± ØµØ­ÙŠØ­Ø©.' });
             }
 
             return sendJson(res, 200, {
@@ -426,23 +509,23 @@ module.exports = async (req, res) => {
                 client_version: clientVer,
                 latest_version: versionInfo.latest_version,
                 download_url: versionInfo.download_url,
-                message: "أنت تعمل على أحدث إصدار معتمد.",
+                message: "Ø£Ù†Øª ØªØ¹Ù…Ù„ Ø¹Ù„Ù‰ Ø£Ø­Ø¯Ø« Ø¥ØµØ¯Ø§Ø± Ù…Ø¹ØªÙ…Ø¯.",
                 changelog: versionInfo.changelog
             });
         }
 
-        // استقبال ومزامنة كامل جداول المنظومة من الديسكتوب
+        // Ø§Ø³ØªÙ‚Ø¨Ø§Ù„ ÙˆÙ…Ø²Ø§Ù…Ù†Ø© ÙƒØ§Ù…Ù„ Ø¬Ø¯Ø§ÙˆÙ„ Ø§Ù„Ù…Ù†Ø¸ÙˆÙ…Ø© Ù…Ù† Ø£Ø¬Ù‡Ø²Ø© Ø§Ù„ÙƒÙ…Ø¨ÙŠÙˆØªØ±
         if ((pathname === '/api/sync/push' || pathname === '/api/sync') && req.method === 'POST') {
             let body = await readJson(req);
             const agency_key = String(body.agency_key || body.key || body.apiKey || req.headers['x-api-key'] || query.key || '').trim();
-            if (!agency_key) return sendJson(res, 400, { success: false, message: "كود الوكالة مطلوب." });
+            if (!agency_key) return sendJson(res, 400, { success: false, message: "ÙƒÙˆØ¯ Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ù…Ø·Ù„ÙˆØ¨." });
 
             let owner = await redis.get(`keyidx:${agency_key}`);
             let user = owner ? await redis.get(`user:${owner}`) : null;
             if (!owner) await redis.set(`keyidx:${agency_key}`, "desktop_client");
 
             await redis.set(`agency:${agency_key}`, {
-                agency_name: body.agency_name || (user ? user.agency_name : "وكالة ميزان"),
+                agency_name: body.agency_name || (user ? user.agency_name : "ÙˆÙƒØ§Ù„Ø© Ù…ÙŠØ²Ø§Ù†"),
                 last_sync: new Date().toISOString(),
                 logical_date: body.logical_date || new Date().toISOString().slice(0, 10),
                 metrics: {
@@ -470,13 +553,13 @@ module.exports = async (req, res) => {
                 weighbridge_tickets: body.weighbridge_tickets || []
             }, { ex: 60 * 60 * 24 * 30 });
 
-            return sendJson(res, 200, { success: true, message: "تم استقبال كامل جداول الوكالة بالسيرفر السحابي بنجاح." });
+            return sendJson(res, 200, { success: true, message: "ØªÙ… Ø§Ø³ØªÙ‚Ø¨Ø§Ù„ ÙƒØ§Ù…Ù„ Ø¬Ø¯Ø§ÙˆÙ„ Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ø¨Ø§Ù„Ø³ÙŠØ±ÙØ± Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ Ø¨Ù†Ø¬Ø§Ø­." });
         }
 
-        // سحب العمليات المنشأة سحابياً إلى الديسكتوب
+        // Ø³Ø­Ø¨ Ø§Ù„Ø¹Ù…Ù„ÙŠØ§Øª Ø§Ù„Ù…Ù†Ø´Ø£Ø© Ø³Ø­Ø§Ø¨ÙŠØ§Ù‹ Ø¥Ù„Ù‰ Ø§Ù„Ø¯ÙŠØ³ÙƒØªÙˆØ¨
         if (pathname === '/api/mobile/orders' && req.method === 'GET') {
             const agency_key = String(query.key || req.headers['x-api-key'] || '').trim();
-            if (!agency_key) return sendJson(res, 400, { success: false, message: "كود الوكالة مطلوب." });
+            if (!agency_key) return sendJson(res, 400, { success: false, message: "ÙƒÙˆØ¯ Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ù…Ø·Ù„ÙˆØ¨." });
 
             const queueKey = `orders_queue:${agency_key}`;
             const queuedOrders = await redis.get(queueKey) || [];
@@ -485,7 +568,7 @@ module.exports = async (req, res) => {
             return sendJson(res, 200, queuedOrders);
         }
 
-        // تسجيل دخول الموظف المستورد من الديسكتوب
+        // ØªØ³Ø¬ÙŠÙ„ Ø¯Ø®ÙˆÙ„ Ø§Ù„Ù…ÙˆØ¸Ù Ø§Ù„Ù…Ø³ØªÙˆØ±Ø¯ Ù…Ù† Ø§Ù„Ø¯ÙŠØ³ÙƒØªÙˆØ¨
         if (pathname === '/api/web/user-login' && req.method === 'POST') {
             let b = await readJson(req);
             const agency_key = String(b.agency_key || '').trim();
@@ -508,7 +591,7 @@ module.exports = async (req, res) => {
             if (matchedUser) {
                 const passHash = matchedUser.PasswordHash || matchedUser.password_hash || matchedUser.passwordHash;
                 if (!verifyDesktopPassword(password, passHash)) {
-                    return sendJson(res, 401, { success: false, message: "كلمة المرور غير صحيحة." });
+                    return sendJson(res, 401, { success: false, message: "ÙƒÙ„Ù…Ø© Ø§Ù„Ù…Ø±ÙˆØ± ØºÙŠØ± ØµØ­ÙŠØ­Ø©." });
                 }
                 return sendJson(res, 200, {
                     success: true,
@@ -516,8 +599,8 @@ module.exports = async (req, res) => {
                         id: matchedUser.Id || matchedUser.id || 1,
                         username: matchedUser.Username || matchedUser.username,
                         full_name: matchedUser.FullName || matchedUser.fullName || matchedUser.full_name,
-                        role: matchedUser.Role || matchedUser.role || 'محاسب',
-                        job_title: matchedUser.JobTitle || matchedUser.job_title || 'محاسب'
+                        role: matchedUser.Role || matchedUser.role || 'Ù…Ø­Ø§Ø³Ø¨',
+                        job_title: matchedUser.JobTitle || matchedUser.job_title || 'Ù…Ø­Ø§Ø³Ø¨'
                     }
                 });
             }
@@ -527,27 +610,28 @@ module.exports = async (req, res) => {
                 if (hash === ownerUser.password_hash) {
                     return sendJson(res, 200, {
                         success: true,
-                        user: { id: 1, username: ownerUser.username, full_name: `${ownerUser.agency_name} (المدير العام)`, role: 'admin', job_title: 'مدير عام' }
+                        user: { id: 1, username: ownerUser.username, full_name: `${ownerUser.agency_name} (Ø§Ù„Ù…Ø¯ÙŠØ± Ø§Ù„Ø¹Ø§Ù…)`, role: 'admin', job_title: 'Ù…Ø¯ÙŠØ± Ø¹Ø§Ù…' }
                     });
                 }
             }
 
-            return sendJson(res, 401, { success: false, message: "بيانات الدخول غير صحيحة." });
+            return sendJson(res, 401, { success: false, message: "Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯Ø®ÙˆÙ„ ØºÙŠØ± ØµØ­ÙŠØ­Ø©." });
         }
 
-        // إنشاء العمليات (إضافة، تعديل، حذف) وتوجيهها لطابور الديسكتوب
+        // Ø¥Ù†Ø´Ø§Ø¡ Ø§Ù„Ø¹Ù…Ù„ÙŠØ§Øª (Ø¥Ø¶Ø§ÙØ©ØŒ ØªØ¹Ø¯ÙŠÙ„ØŒ Ø­Ø°Ù) Ù…Ø¹ ØªØ²ÙˆÙŠØ¯ ÙƒÙ„ Ø¹Ù…Ù„ÙŠØ© Ø¨Ù€ OrderId ÙØ±ÙŠØ¯ Ù„Ù…Ù†Ø¹ ØªÙƒØ±Ø§Ø± Ø§Ù„Ù…Ø²Ø§Ù…Ù†Ø©
         if (pathname === '/api/web/create-action' && req.method === 'POST') {
             let b = await readJson(req);
             const { agency_key, action_type, user_name, data, source } = b;
-            if (!agency_key || !action_type || !data) return sendJson(res, 400, { success: false, message: "بيانات ناقصة." });
+            if (!agency_key || !action_type || !data) return sendJson(res, 400, { success: false, message: "Ø¨ÙŠØ§Ù†Ø§Øª Ù†Ø§Ù‚ØµØ©." });
 
             const queueKey = `orders_queue:${agency_key}`;
             const queuedOrders = await redis.get(queueKey) || [];
 
             const dateStr = data.Date || new Date().toISOString().slice(0, 10);
-            const authorFormatted = `${user_name || "مستخدم"} (${source === 'mobile' ? 'مستخدم الهاتف' : 'مستخدم السيرفر'})`;
+            const authorFormatted = `${user_name || "Ù…Ø³ØªØ®Ø¯Ù…"} (${source === 'mobile' ? 'Ù…Ø³ØªØ®Ø¯Ù… Ø§Ù„Ù‡Ø§ØªÙ' : 'Ù…Ø³ØªØ®Ø¯Ù… Ø§Ù„Ø³ÙŠØ±ÙØ±'})`;
             const prefix = source === 'mobile' ? 'MOB' : 'SRV';
             const seq = Math.floor(1000 + Math.random() * 9000);
+            const uniqueOrderId = `ORD-${Date.now()}-${seq}`;
 
             switch (action_type) {
                 case 'SALE_INVOICE': {
@@ -556,15 +640,16 @@ module.exports = async (req, res) => {
                     items.forEach((it, idx) => {
                         queuedOrders.push({
                             ActionType: 'SALE_INVOICE',
+                            OrderId: uniqueOrderId,
                             InvoiceNo: invNo,
                             Date: dateStr,
-                            Customer: data.Customer || "عميل نقدي",
+                            Customer: data.Customer || "Ø¹Ù…ÙŠÙ„ Ù†Ù‚Ø¯ÙŠ",
                             Item: it.Item,
-                            Supplier: it.Supplier || "عام",
+                            Supplier: it.Supplier || "Ø¹Ø§Ù…",
                             LoadKey: it.LoadKey || data.LoadKey || "",
-                            Salesman: data.Salesman || "عام",
-                            Grade: it.Grade || "فرز أول ممتاز",
-                            CrateType: it.CrateType || "برنيكة بلاستيك",
+                            Salesman: data.Salesman || "Ø¹Ø§Ù…",
+                            Grade: it.Grade || "ÙØ±Ø² Ø£ÙˆÙ„ Ù…Ù…ØªØ§Ø²",
+                            CrateType: it.CrateType || "Ø¨Ø±Ù†ÙŠÙƒØ© Ø¨Ù„Ø§Ø³ØªÙŠÙƒ",
                             Qty: Number(it.Qty || 0),
                             Weight: Number(it.Weight || 0),
                             Price: Number(it.Price || 0),
@@ -572,19 +657,20 @@ module.exports = async (req, res) => {
                             Value: Number(it.Value || 0),
                             PaidAmount: Number(idx === 0 ? (data.PaidAmount || 0) : 0),
                             RemainingAmount: Number(idx === 0 ? (data.RemainingAmount || 0) : 0),
-                            PaymentMethod: data.PaymentMethod || "نقدي (كاش)",
+                            PaymentMethod: data.PaymentMethod || "Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)",
                             CreatedBy: authorFormatted
                         });
                     });
                     break;
                 }
                 case 'DELETE_INVOICE':
-                    queuedOrders.push({ ActionType: 'DELETE_INVOICE', InvoiceNo: data.InvoiceNo, CreatedBy: authorFormatted });
+                    queuedOrders.push({ ActionType: 'DELETE_INVOICE', OrderId: uniqueOrderId, InvoiceNo: data.InvoiceNo, CreatedBy: authorFormatted });
                     break;
                 case 'LOAD_SUPPLY': {
                     const items = Array.isArray(data.Items) ? data.Items : [{ Item: data.Item, QtyIn: Number(data.QtyIn || 0), WeightIn: Number(data.WeightIn || 0) }];
                     queuedOrders.push({
                         ActionType: 'LOAD_SUPPLY',
+                        OrderId: uniqueOrderId,
                         Date: dateStr,
                         Vehicle: data.Vehicle,
                         Supplier: data.Supplier,
@@ -600,38 +686,41 @@ module.exports = async (req, res) => {
                 case 'COLLECTION':
                     queuedOrders.push({
                         ActionType: 'COLLECTION',
+                        OrderId: uniqueOrderId,
                         ReceiptNo: `REC-${prefix}-${seq}`,
                         Date: dateStr,
                         Customer: data.Customer,
                         Amount: Number(data.Amount || 0),
-                        PaymentMethod: data.PaymentMethod || "نقدي (كاش)",
+                        PaymentMethod: data.PaymentMethod || "Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)",
                         CreatedBy: authorFormatted,
-                        Notes: data.Notes || `سند تحصيل`
+                        Notes: data.Notes || `Ø³Ù†Ø¯ ØªØ­ØµÙŠÙ„`
                     });
                     break;
                 case 'DELETE_COLLECTION':
-                    queuedOrders.push({ ActionType: 'DELETE_COLLECTION', ReceiptNo: data.ReceiptNo, CreatedBy: authorFormatted });
+                    queuedOrders.push({ ActionType: 'DELETE_COLLECTION', OrderId: uniqueOrderId, ReceiptNo: data.ReceiptNo, CreatedBy: authorFormatted });
                     break;
                 case 'EXPENSE':
                     queuedOrders.push({
                         ActionType: 'EXPENSE',
+                        OrderId: uniqueOrderId,
                         Date: dateStr,
-                        Category: data.Category || "مصاريف نثرية عامة",
-                        Description: data.Description || `صرف نثري`,
+                        Category: data.Category || "Ù…ØµØ§Ø±ÙŠÙ Ù†Ø«Ø±ÙŠØ© Ø¹Ø§Ù…Ø©",
+                        Description: data.Description || `ØµØ±Ù Ù†Ø«Ø±ÙŠ`,
                         Amount: Number(data.Amount || 0),
-                        PaymentMethod: data.PaymentMethod || "نقدي (كاش)",
+                        PaymentMethod: data.PaymentMethod || "Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)",
                         CreatedBy: authorFormatted
                     });
                     break;
                 case 'DELETE_EXPENSE':
-                    queuedOrders.push({ ActionType: 'DELETE_EXPENSE', Id: data.Id, CreatedBy: authorFormatted });
+                    queuedOrders.push({ ActionType: 'DELETE_EXPENSE', OrderId: uniqueOrderId, Id: data.Id, CreatedBy: authorFormatted });
                     break;
                 case 'PURCHASE':
                     queuedOrders.push({
                         ActionType: 'PURCHASE',
+                        OrderId: uniqueOrderId,
                         InvoiceNo: `PUR-${prefix}-${seq}`,
                         Date: dateStr,
-                        Category: data.Category || "شراء بضاعة تجارية (تضاف للأرضية)",
+                        Category: data.Category || "Ø´Ø±Ø§Ø¡ Ø¨Ø¶Ø§Ø¹Ø© ØªØ¬Ø§Ø±ÙŠØ© (ØªØ¶Ø§Ù Ù„Ù„Ø£Ø±Ø¶ÙŠØ©)",
                         Supplier: data.Supplier,
                         Item: data.Item,
                         Qty: Number(data.Qty || 0),
@@ -640,7 +729,7 @@ module.exports = async (req, res) => {
                         Value: Number(data.Value || 0),
                         PaidAmount: Number(data.PaidAmount || 0),
                         RemainingAmount: Number(data.RemainingAmount || 0),
-                        PaymentMethod: data.PaymentMethod || "نقدي (كاش)",
+                        PaymentMethod: data.PaymentMethod || "Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)",
                         CreatedBy: authorFormatted
                     });
                     break;
@@ -648,23 +737,26 @@ module.exports = async (req, res) => {
                 case 'CRATE_RETURN':
                     queuedOrders.push({
                         ActionType: action_type,
+                        OrderId: uniqueOrderId,
                         Date: dateStr,
                         Customer: data.Customer,
-                        Kind: action_type === 'CRATE_RETURN' ? 'استرجاع' : 'تسليم',
-                        CrateType: data.CrateType || "برنيكة بلاستيك",
+                        Kind: action_type === 'CRATE_RETURN' ? 'Ø§Ø³ØªØ±Ø¬Ø§Ø¹' : 'ØªØ³Ù„ÙŠÙ…',
+                        CrateType: data.CrateType || "Ø¨Ø±Ù†ÙŠÙƒØ© Ø¨Ù„Ø§Ø³ØªÙŠÙƒ",
                         Qty: Number(data.Qty || 0),
                         Price: Number(data.Price || 70),
                         Amount: Number(data.Amount || (data.Qty * (data.Price || 70))),
+                        IsCashCollected: !!data.IsCashCollected,
                         CreatedBy: authorFormatted
                     });
                     break;
                 case 'WEIGHBRIDGE_TICKET':
                     queuedOrders.push({
                         ActionType: 'WEIGHBRIDGE_TICKET',
+                        OrderId: uniqueOrderId,
                         TicketNo: `WB-${prefix}-${seq}`,
                         Date: dateStr,
                         Vehicle: data.Vehicle,
-                        DriverName: data.DriverName || "سائق حر",
+                        DriverName: data.DriverName || "Ø³Ø§Ø¦Ù‚ Ø­Ø±",
                         Supplier: data.Supplier,
                         Item: data.Item,
                         GrossWeight: Number(data.GrossWeight || 0),
@@ -675,26 +767,26 @@ module.exports = async (req, res) => {
             }
 
             await redis.set(queueKey, queuedOrders, { ex: 60 * 60 * 24 * 7 });
-            return sendJson(res, 200, { success: true, message: `تم تسجيل المعاملة بنجاح باسم [${authorFormatted}] وتمريرها للمزامنة الفورية.` });
+            return sendJson(res, 200, { success: true, message: `ØªÙ… ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ù…Ø¹Ø§Ù…Ù„Ø© Ø¨Ù†Ø¬Ø§Ø­ ÙˆØªÙˆÙ„ÙŠØ¯ Ø§Ù„Ù…Ø¹Ø±Ù [${uniqueOrderId}] ÙˆØªÙ…Ø±ÙŠØ±Ù‡Ø§ Ù„Ù„Ù…Ø²Ø§Ù…Ù†Ø©.` });
         }
 
-        // 13. بوابة الويب السحابية الملكية الشاملة لكافة الأقسام الـ 16 كاملة
+        // 13. Ø¨ÙˆØ§Ø¨Ø© Ø§Ù„ÙˆÙŠØ¨ Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠØ© Ø§Ù„Ø´Ø§Ù…Ù„Ø© Ù„ÙƒØ§ÙØ© Ø§Ù„Ø£Ù‚Ø³Ø§Ù… Ø§Ù„Ù€ 16
         if (pathname === '/app') {
             const key = String(query.key || '').trim();
             const data = key ? await redis.get(`agency:${key}`) : null;
 
             if (!data) {
-                return sendHtml(res, 200, shell('بانتظار المزامنة | ميزان', `
+                return sendHtml(res, 200, shell('Ø¨Ø§Ù†ØªØ¸Ø§Ø± Ø§Ù„Ù…Ø²Ø§Ù…Ù†Ø© | Ù…ÙŠØ²Ø§Ù†', `
                     <div class="box" style="text-align:center">
-                        <h2>⏳ الحساب جاهز وبانتظار المزامنة</h2>
+                        <h2>â³ Ø§Ù„Ø­Ø³Ø§Ø¨ Ø¬Ø§Ù‡Ø² ÙˆØ¨Ø§Ù†ØªØ¸Ø§Ø± Ø§Ù„Ù…Ø²Ø§Ù…Ù†Ø©</h2>
                         <p style="color:#C8B8B5;font-size:13px;line-height:1.8;">
-                            1. افتح برنامج <b>ميزان</b> على الكمبيوتر.<br>
-                            2. ادخل على <b>(الإعدادات ⚙️ ➔ الربط والمزامنة السحابية 📱)</b>.<br>
-                            3. تأكد من إدخال كود الوكالة التالي:<br>
-                            <b style="color:#D4AF37;font-size:16px;background:#1A0206;padding:4px 8px;border-radius:4px;display:inline-block;margin:6px 0;">${esc(key || 'يرجى تسجيل الدخول أولاً')}</b><br>
-                            4. اضغط على زر <b>(🔄 مزامنة فورية الآن)</b> بالكمبيوتر.<br>
+                            1. Ø§ÙØªØ­ Ø¨Ø±Ù†Ø§Ù…Ø¬ <b>Ù…ÙŠØ²Ø§Ù†</b> Ø¹Ù„Ù‰ Ø§Ù„ÙƒÙ…Ø¨ÙŠÙˆØªØ±.<br>
+                            2. Ø§Ø¯Ø®Ù„ Ø¹Ù„Ù‰ <b>(Ø§Ù„Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª âš™ï¸ âž” Ø§Ù„Ø±Ø¨Ø· ÙˆØ§Ù„Ù…Ø²Ø§Ù…Ù†Ø© Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠØ© ðŸ“±)</b>.<br>
+                            3. ØªØ£ÙƒØ¯ Ù…Ù† Ø¥Ø¯Ø®Ø§Ù„ ÙƒÙˆØ¯ Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ø§Ù„ØªØ§Ù„ÙŠ:<br>
+                            <b style="color:#D4AF37;font-size:16px;background:#1A0206;padding:4px 8px;border-radius:4px;display:inline-block;margin:6px 0;">${esc(key || 'ÙŠØ±Ø¬Ù‰ ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø¯Ø®ÙˆÙ„ Ø£ÙˆÙ„Ø§Ù‹')}</b><br>
+                            4. Ø§Ø¶ØºØ· Ø¹Ù„Ù‰ Ø²Ø± <b>(ðŸ”„ Ù…Ø²Ø§Ù…Ù†Ø© ÙÙˆØ±ÙŠØ© Ø§Ù„Ø¢Ù†)</b> Ø¨Ø§Ù„ÙƒÙ…Ø¨ÙŠÙˆØªØ±.<br>
                         </p>
-                        <button class="btn" onclick="location.reload()">🔄 تحديث الصفحة بعد المزامنة</button>
+                        <button class="btn" onclick="location.reload()">ðŸ”„ ØªØ­Ø¯ÙŠØ« Ø§Ù„ØµÙØ­Ø© Ø¨Ø¹Ø¯ Ø§Ù„Ù…Ø²Ø§Ù…Ù†Ø©</button>
                     </div>`));
             }
 
@@ -714,7 +806,6 @@ module.exports = async (req, res) => {
             const checks = Array.isArray(data.checks) ? data.checks : [];
             const weighbridgeTickets = Array.isArray(data.weighbridge_tickets) ? data.weighbridge_tickets : [];
 
-            // دوال استخراج آمنة
             const getName = o => o.Name || o.name || o.FullName || o.fullName || '';
             const getSupplier = o => o.Supplier || o.supplier || '';
             const getPrice = o => Number(o.DefaultPrice || o.defaultPrice || o.Price || o.price || 0);
@@ -723,12 +814,21 @@ module.exports = async (req, res) => {
             const getDate = o => o.Date || o.date || '';
             const getItem = o => o.Item || o.item || '';
 
+            const currentOrigin = originOf(req);
+            const pairingConfigJson = JSON.stringify({
+                LocalUrl: currentOrigin,
+                CloudUrl: currentOrigin,
+                AgencyKey: key,
+                AgencyName: data.agency_name || "ÙˆÙƒØ§Ù„Ø© Ù…ÙŠØ²Ø§Ù†"
+            });
+            const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(pairingConfigJson)}`;
+
             return sendHtml(res, 200, `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(data.agency_name)} | منظومة ميزان السحابية الشاملة</title>
+<title>${esc(data.agency_name)} | Ù…Ù†Ø¸ÙˆÙ…Ø© Ù…ÙŠØ²Ø§Ù† Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠØ©</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Aref+Ruqaa:wght@700&display=swap');
 body { font-family: 'Cairo', -apple-system, Tahoma, sans-serif; background: #200308; margin: 0; padding: 12px; color: #FAF4F1; }
@@ -775,167 +875,205 @@ th { background: #5A0817; color: white; }
 </head>
 <body>
 
-    <!-- 1. شاشة تسجيل الدخول المسبقة للموظفين -->
+    <!-- 1. Ø´Ø§Ø´Ø© ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø¯Ø®ÙˆÙ„ Ø§Ù„Ù…Ø³Ø¨Ù‚Ø© Ù„Ù„Ù…ÙˆØ¸ÙÙŠÙ† -->
     <div id="loginScreen">
         <div class="login-box">
             <div class="login-header">
-                <h2>🏢 ${esc(data.agency_name)}</h2>
-                <p>منظومة ميزان | تسجيل دخول الموظفين</p>
+                <h2>ðŸ¢ ${esc(data.agency_name)}</h2>
+                <p>Ù…Ù†Ø¸ÙˆÙ…Ø© Ù…ÙŠØ²Ø§Ù† | ØªØ³Ø¬ÙŠÙ„ Ø¯Ø®ÙˆÙ„ Ø§Ù„Ù…ÙˆØ¸ÙÙŠÙ†</p>
             </div>
             
-            <div class="badge">🔐 بوابة تسجيل الدخول الآمنة</div>
+            <div class="badge">ðŸ” Ø¨ÙˆØ§Ø¨Ø© ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø¯Ø®ÙˆÙ„ Ø§Ù„Ø¢Ù…Ù†Ø©</div>
 
             <form onsubmit="handleUserLogin(event)">
-                <label style="color:#D4AF37;">اختر المستخدم / الموظف</label>
+                <label style="color:#D4AF37;">Ø§Ø®ØªØ± Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… / Ø§Ù„Ù…ÙˆØ¸Ù</label>
                 ${users && users.length > 0 ? `
                 <select id="loginUserSelect" onchange="syncSelectedUserText()" required style="background:#FAF4F1;">
-                    ${users.map(u => `<option value="${esc(u.Username || u.username)}">${esc(u.FullName || u.fullName || u.Username)} (${esc(u.JobTitle || u.job_title || u.Role || 'محاسب')})</option>`).join('')}
+                    ${users.map(u => `<option value="${esc(u.Username || u.username)}">${esc(u.FullName || u.fullName || u.Username)} (${esc(u.JobTitle || u.job_title || u.Role || 'Ù…Ø­Ø§Ø³Ø¨')})</option>`).join('')}
                 </select>
                 <input type="hidden" id="loginUserInput" value="${esc(users[0].Username || users[0].username)}" />
                 ` : `
-                <input type="text" id="loginUserInput" placeholder="اسم المستخدم أو admin" required style="background:#FAF4F1;" />
+                <input type="text" id="loginUserInput" placeholder="Ø§Ø³Ù… Ø§Ù„Ù…Ø³ØªØ®Ø¯Ù… Ø£Ùˆ admin" required style="background:#FAF4F1;" />
                 `}
 
-                <label style="color:#D4AF37;">كلمة المرور</label>
-                <input type="password" id="loginPassInput" placeholder="أدخل كلمة المرور الخاصة بك" required style="background:#FAF4F1;" />
+                <label style="color:#D4AF37;">ÙƒÙ„Ù…Ø© Ø§Ù„Ù…Ø±ÙˆØ±</label>
+                <input type="password" id="loginPassInput" placeholder="Ø£Ø¯Ø®Ù„ ÙƒÙ„Ù…Ø© Ø§Ù„Ù…Ø±ÙˆØ± Ø§Ù„Ø®Ø§ØµØ© Ø¨Ùƒ" required style="background:#FAF4F1;" />
 
-                <button type="submit" class="submit-btn" style="background:#5A0817;margin-top:20px;">🚀 دخول للمنظومة</button>
+                <button type="submit" class="submit-btn" style="background:#5A0817;margin-top:20px;">ðŸš€ Ø¯Ø®ÙˆÙ„ Ù„Ù„Ù…Ù†Ø¸ÙˆÙ…Ø©</button>
                 <div class="msg" id="loginErrorMsg"></div>
             </form>
         </div>
     </div>
 
-    <!-- 2. الشاشة الرئيسية لجميع الأقسام والخدمات الـ 16 الشاملة -->
+    <!-- 2. Ø§Ù„Ø´Ø§Ø´Ø© Ø§Ù„Ø±Ø¦ÙŠØ³ÙŠØ© Ù„Ø¬Ù…ÙŠØ¹ Ø§Ù„Ø£Ù‚Ø³Ø§Ù… ÙˆØ§Ù„Ø®Ø¯Ù…Ø§Øª -->
     <div id="mainAppScreen">
         <div class="header">
-            <h2>🏢 ${esc(data.agency_name)}</h2>
-            <div style="font-size:11px; color:#C8B8B5; margin-top:4px;">اليومية: ${esc(data.logical_date)} | آخر مزامنة: ${new Date(data.last_sync).toLocaleTimeString('ar-EG', { timeZone: 'Africa/Cairo' })}</div>
+            <h2>ðŸ¢ ${esc(data.agency_name)}</h2>
+            <div style="font-size:11px; color:#C8B8B5; margin-top:4px;">Ø§Ù„ÙŠÙˆÙ…ÙŠØ©: ${esc(data.logical_date)} | Ø¢Ø®Ø± Ù…Ø²Ø§Ù…Ù†Ø©: ${new Date(data.last_sync).toLocaleTimeString('ar-EG', { timeZone: 'Africa/Cairo' })}</div>
             <div class="user-bar">
-                <span id="activeUserLabel">👤 الموظف: --</span>
-                <button class="logout-btn" onclick="handleLogout()">🚪 تسجيل الخروج</button>
+                <span id="activeUserLabel">ðŸ‘¤ Ø§Ù„Ù…ÙˆØ¸Ù: --</span>
+                <div>
+                    <button type="button" class="tab-btn" style="background:#D4AF37;color:#200308;padding:4px 10px;font-size:11px;margin-left:6px;" onclick="switchTab('tab-key', this)">ðŸ”‘ ÙƒÙˆØ¯ Ø§Ù„ÙˆÙƒØ§Ù„Ø© ÙˆØ§Ù„Ø§Ù‚ØªØ±Ø§Ù†</button>
+                    <button class="logout-btn" onclick="handleLogout()">ðŸšª Ø®Ø±ÙˆØ¬</button>
+                </div>
             </div>
         </div>
 
-        <!-- شريط الفلترة التاريخية الشامل -->
+        <!-- Ø´Ø±ÙŠØ· Ø§Ù„ÙÙ„ØªØ±Ø© Ø§Ù„ØªØ§Ø±ÙŠØ®ÙŠØ© -->
         <div class="date-bar">
-            <label>📅 من:</label>
+            <label>ðŸ“… Ù…Ù†:</label>
             <input type="date" id="filterFromDate" onchange="applyGlobalDateFilter()" />
-            <label>إلى:</label>
+            <label>Ø¥Ù„Ù‰:</label>
             <input type="date" id="filterToDate" onchange="applyGlobalDateFilter()" />
-            <button type="button" class="quick-btn" onclick="setDateRange('today')">اليوم</button>
-            <button type="button" class="quick-btn" onclick="setDateRange('month')">الشهر الحالي</button>
-            <button type="button" class="quick-btn" onclick="setDateRange('all')">عرض الكل</button>
+            <button type="button" class="quick-btn" onclick="setDateRange('today')">Ø§Ù„ÙŠÙˆÙ…</button>
+            <button type="button" class="quick-btn" onclick="setDateRange('month')">Ø§Ù„Ø´Ù‡Ø± Ø§Ù„Ø­Ø§Ù„ÙŠ</button>
+            <button type="button" class="quick-btn" onclick="setDateRange('all')">Ø¹Ø±Ø¶ Ø§Ù„ÙƒÙ„</button>
         </div>
 
-        <!-- شريط التنقل لكافة أقسام المنظومة الـ 16 -->
+        <!-- Ø´Ø±ÙŠØ· Ø§Ù„ØªÙ†Ù‚Ù„ Ù„Ù„Ø£Ù‚Ø³Ø§Ù… -->
         <div class="nav-scroll">
-            <button class="tab-btn active" onclick="switchTab('tab-dash', this)">📊 المؤشرات الحية</button>
-            <button class="tab-btn" onclick="switchTab('tab-pos', this)">🛒 نقطة البيع (POS)</button>
-            <button class="tab-btn" onclick="switchTab('tab-sales-reg', this)">📋 سجل المبيعات</button>
-            <button class="tab-btn" onclick="switchTab('tab-load', this)">🚚 ساحة توريد السيارات</button>
-            <button class="tab-btn" onclick="switchTab('tab-settle', this)">🚛 تصفية سيارات الأمانة</button>
-            <button class="tab-btn" onclick="switchTab('tab-stock', this)">📦 جرد بضاعة الأرضية</button>
-            <button class="tab-btn" onclick="switchTab('tab-col', this)">🧾 سندات التحصيل</button>
-            <button class="tab-btn" onclick="switchTab('tab-pending', this)">📄 الفواتير الآجلة</button>
-            <button class="tab-btn" onclick="switchTab('tab-exp', this)">💸 الخزينة والمصروفات</button>
-            <button class="tab-btn" onclick="switchTab('tab-pur', this)">📥 فواتير المشتريات</button>
-            <button class="tab-btn" onclick="switchTab('tab-crate', this)">📦 حركة الصناديق والرهن</button>
-            <button class="tab-btn" onclick="switchTab('tab-bank', this)">🏦 البنوك والشيكات</button>
-            <button class="tab-btn" onclick="switchTab('tab-wb', this)">⚖️ ميزان بسكول</button>
-            <button class="tab-btn" onclick="switchTab('tab-master', this)">👥 دليل الحسابات</button>
-            <button class="tab-btn" onclick="switchTab('tab-printer', this)">🖨️ إعدادات الطابعات والشبكة</button>
+            <button class="tab-btn active" onclick="switchTab('tab-dash', this)">ðŸ“Š Ø§Ù„Ù…Ø¤Ø´Ø±Ø§Øª Ø§Ù„Ø­ÙŠØ©</button>
+            <button class="tab-btn" onclick="switchTab('tab-pos', this)">ðŸ›’ Ù†Ù‚Ø·Ø© Ø§Ù„Ø¨ÙŠØ¹ (POS)</button>
+            <button class="tab-btn" onclick="switchTab('tab-sales-reg', this)">ðŸ“‹ Ø³Ø¬Ù„ Ø§Ù„Ù…Ø¨ÙŠØ¹Ø§Øª</button>
+            <button class="tab-btn" onclick="switchTab('tab-load', this)">ðŸšš Ø³Ø§Ø­Ø© ØªÙˆØ±ÙŠØ¯ Ø§Ù„Ø³ÙŠØ§Ø±Ø§Øª</button>
+            <button class="tab-btn" onclick="switchTab('tab-settle', this)">ðŸš› ØªØµÙÙŠØ© Ø³ÙŠØ§Ø±Ø§Øª Ø§Ù„Ø£Ù…Ø§Ù†Ø©</button>
+            <button class="tab-btn" onclick="switchTab('tab-stock', this)">ðŸ“¦ Ø¬Ø±Ø¯ Ø¨Ø¶Ø§Ø¹Ø© Ø§Ù„Ø£Ø±Ø¶ÙŠØ©</button>
+            <button class="tab-btn" onclick="switchTab('tab-col', this)">ðŸ§¾ Ø³Ù†Ø¯Ø§Øª Ø§Ù„ØªØ­ØµÙŠÙ„</button>
+            <button class="tab-btn" onclick="switchTab('tab-pending', this)">ðŸ“„ Ø§Ù„ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø¢Ø¬Ù„Ø©</button>
+            <button class="tab-btn" onclick="switchTab('tab-exp', this)">ðŸ’¸ Ø§Ù„Ø®Ø²ÙŠÙ†Ø© ÙˆØ§Ù„Ù…ØµØ±ÙˆÙØ§Øª</button>
+            <button class="tab-btn" onclick="switchTab('tab-pur', this)">ðŸ“¥ ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ù…Ø´ØªØ±ÙŠØ§Øª</button>
+            <button class="tab-btn" onclick="switchTab('tab-crate', this)">ðŸ“¦ Ø­Ø±ÙƒØ© Ø§Ù„ØµÙ†Ø§Ø¯ÙŠÙ‚ ÙˆØ§Ù„Ø±Ù‡Ù†</button>
+            <button class="tab-btn" onclick="switchTab('tab-bank', this)">ðŸ¦ Ø§Ù„Ø¨Ù†ÙˆÙƒ ÙˆØ§Ù„Ø´ÙŠÙƒØ§Øª</button>
+            <button class="tab-btn" onclick="switchTab('tab-wb', this)">âš–ï¸ Ù…ÙŠØ²Ø§Ù† Ø¨Ø³ÙƒÙˆÙ„</button>
+            <button class="tab-btn" onclick="switchTab('tab-master', this)">ðŸ‘¥ Ø¯Ù„ÙŠÙ„ Ø§Ù„Ø­Ø³Ø§Ø¨Ø§Øª</button>
+            <button class="tab-btn" onclick="switchTab('tab-key', this)">ðŸ”‘ ÙƒÙˆØ¯ Ø§Ù„ÙˆÙƒØ§Ù„Ø© ÙˆØ§Ù„Ø§Ù‚ØªØ±Ø§Ù†</button>
+            <button class="tab-btn" onclick="switchTab('tab-printer', this)">ðŸ–¨ï¸ Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§Ù„Ø·Ø§Ø¨Ø¹Ø§Øª</button>
         </div>
 
-        <!-- 1. المؤشرات الحية -->
+        <!-- 1. Ø§Ù„Ù…Ø¤Ø´Ø±Ø§Øª Ø§Ù„Ø­ÙŠØ© -->
         <div id="tab-dash" class="tab-content active">
             <div class="card">
-                <div>💰 نقدية الدرج الحالية:</div>
-                <div class="val">${Number(m.drawer_cash || 0).toLocaleString()} ج</div>
+                <div>ðŸ’° Ù†Ù‚Ø¯ÙŠØ© Ø§Ù„Ø¯Ø±Ø¬ Ø§Ù„Ø­Ø§Ù„ÙŠØ©:</div>
+                <div class="val">${Number(m.drawer_cash || 0).toLocaleString()} Ø¬</div>
             </div>
             <div class="card">
-                <div>💵 مبيعات اليوم:</div>
-                <div class="val" style="color:#5A0817;">${Number(m.today_sales || 0).toLocaleString()} ج</div>
+                <div>ðŸ’µ Ù…Ø¨ÙŠØ¹Ø§Øª Ø§Ù„ÙŠÙˆÙ…:</div>
+                <div class="val" style="color:#5A0817;">${Number(m.today_sales || 0).toLocaleString()} Ø¬</div>
             </div>
             <div class="card">
-                <div>📈 أرباح الوكالة اليومية:</div>
-                <div class="val">${Number(m.net_profit || 0).toLocaleString()} ج</div>
+                <div>ðŸ“ˆ Ø£Ø±Ø¨Ø§Ø­ Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ø§Ù„ÙŠÙˆÙ…ÙŠØ©:</div>
+                <div class="val">${Number(m.net_profit || 0).toLocaleString()} Ø¬</div>
             </div>
             <div class="card">
-                <div>📦 برانيك متداولة بالسوق:</div>
-                <div class="val" style="color:#B45309;">${Number(m.crates_in_market || 0).toLocaleString()} برنيكة</div>
+                <div>ðŸ“¦ Ø¨Ø±Ø§Ù†ÙŠÙƒ Ù…ØªØ¯Ø§ÙˆÙ„Ø© Ø¨Ø§Ù„Ø³ÙˆÙ‚:</div>
+                <div class="val" style="color:#B45309;">${Number(m.crates_in_market || 0).toLocaleString()} Ø¨Ø±Ù†ÙŠÙƒØ©</div>
             </div>
         </div>
 
-        <!-- 2. نقطة البيع وسلة الفواتير (POS) -->
+        <!-- Ø´Ø§Ø´Ø© Ø¹Ø±Ø¶ ÙƒÙˆØ¯ Ø§Ù„ÙˆÙƒØ§Ù„Ø© ÙˆØ§Ù„Ø§Ù‚ØªØ±Ø§Ù† Ø§Ù„ÙÙˆØ±ÙŠ Ø¨Ø§Ù„Ù€ QR -->
+        <div id="tab-key" class="tab-content">
+            <div class="form-card" style="text-align:center;">
+                <h3 style="margin-top:0;color:#5A0817;">ðŸ”‘ ÙƒÙˆØ¯ Ø±Ø¨Ø· Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ ÙˆØ§Ù‚ØªØ±Ø§Ù† Ø§Ù„Ù‡ÙˆØ§ØªÙ</h3>
+                <p style="color:#666;font-size:12.5px;">Ø§Ø³ØªØ®Ø¯Ù… Ù‡Ø°Ø§ Ø§Ù„ÙƒÙˆØ¯ Ø£Ùˆ Ø§Ù…Ø³Ø­ Ø§Ù„Ø¨Ø§Ø±ÙƒÙˆØ¯ Ø¨Ø§Ù„ÙƒØ§Ù…ÙŠØ±Ø§ Ù„Ø±Ø¨Ø· Ø£Ø¬Ù‡Ø²Ø© Ø§Ù„ÙƒÙ…Ø¨ÙŠÙˆØªØ± ÙˆØ§Ù„Ù‡ÙˆØ§ØªÙ Ø¨Ù‡Ø°Ù‡ Ø§Ù„ÙˆÙƒØ§Ù„Ø© ÙÙˆØ±Ø§Ù‹.</p>
+
+                <div style="background:#FFF;border:2px dashed #D4AF37;border-radius:12px;padding:15px;display:inline-block;margin:10px auto;">
+                    <img src="${esc(qrImageUrl)}" alt="QR Code" style="width:200px;height:200px;display:block;margin:auto;" />
+                    <div style="font-size:11px;color:#888;margin-top:6px;">Ø§Ù…Ø³Ø­ Ù…Ù† ÙƒØ§Ù…ÙŠØ±Ø§ Ø§Ù„Ù‡Ø§ØªÙ Ø£Ùˆ Ø¨Ø±Ù†Ø§Ù…Ø¬ Ø§Ù„ÙƒÙ…Ø¨ÙŠÙˆØªØ±</div>
+                </div>
+
+                <div style="max-width:380px;margin:auto;text-align:right;">
+                    <label>ÙƒÙˆØ¯ Ø±Ø¨Ø· Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ø§Ù„Ø³Ø±ÙŠ (Agency Sync Key):</label>
+                    <div style="display:flex;gap:6px;">
+                        <input type="text" id="dispKey" value="${esc(key)}" readonly style="text-align:center;font-weight:bold;font-family:Consolas;letter-spacing:1px;" />
+                        <button type="button" class="btn" style="width:auto;margin:4px 0 0 0;padding:8px 14px;" onclick="copyText('dispKey')">ðŸ“‹ Ù†Ø³Ø®</button>
+                    </div>
+
+                    <label style="margin-top:12px;">Ø±Ø§Ø¨Ø· Ø§Ù„Ø³ÙŠØ±ÙØ± Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ (Cloud Server URL):</label>
+                    <div style="display:flex;gap:6px;">
+                        <input type="text" id="dispUrl" value="${esc(currentOrigin)}" readonly style="text-align:center;font-family:Consolas;" />
+                        <button type="button" class="btn" style="width:auto;margin:4px 0 0 0;padding:8px 14px;" onclick="copyText('dispUrl')">ðŸ“‹ Ù†Ø³Ø®</button>
+                    </div>
+                </div>
+
+                <div style="background:#FDF4DF;border:1px solid #D4AF37;border-radius:8px;padding:10px;margin-top:16px;text-align:right;font-size:12px;line-height:1.8;">
+                    <b>ðŸ’¡ Ø®Ø·ÙˆØ§Øª Ø±Ø¨Ø· Ø¨Ø±Ù†Ø§Ù…Ø¬ Ø§Ù„ÙƒÙ…Ø¨ÙŠÙˆØªØ±:</b><br>
+                    1. Ø§ÙØªØ­ Ø¨Ø±Ù†Ø§Ù…Ø¬ <b>Ù…ÙŠØ²Ø§Ù†</b> Ø¹Ù„Ù‰ Ø§Ù„ÙƒÙ…Ø¨ÙŠÙˆØªØ± âž” <b>Ø§Ù„Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª</b> âž” <b>Ø§Ù„Ø±Ø¨Ø· ÙˆØ§Ù„Ù…Ø²Ø§Ù…Ù†Ø© Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠØ©</b>.<br>
+                    2. Ø§Ù„ØµÙ‚ <b>Ø±Ø§Ø¨Ø· Ø§Ù„Ø³ÙŠØ±ÙØ±</b> ÙÙŠ Ø®Ø§Ù†Ø© (Ø¹Ù†ÙˆØ§Ù† Ø§Ù„Ø³ÙŠØ±ÙØ± Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ).<br>
+                    3. Ø§Ù„ØµÙ‚ <b>ÙƒÙˆØ¯ Ø§Ù„ÙˆÙƒØ§Ù„Ø©</b> ÙÙŠ Ø®Ø§Ù†Ø© (ÙƒÙˆØ¯ Ø±Ø¨Ø· Ø§Ù„ÙˆÙƒØ§Ù„Ø© Ø§Ù„Ø³Ø±ÙŠ) ÙˆØ§Ø¶ØºØ· Ø­ÙØ¸ Ø«Ù… <b>(Ù…Ø²Ø§Ù…Ù†Ø© ÙÙˆØ±ÙŠØ© Ø§Ù„Ø¢Ù†)</b>.
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. Ù†Ù‚Ø·Ø© Ø§Ù„Ø¨ÙŠØ¹ ÙˆØ³Ù„Ø© Ø§Ù„ÙÙˆØ§ØªÙŠØ± (POS) -->
         <div id="tab-pos" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">🛒 إصدار فاتورة مبيعات سحابية</h3>
+                <h3 style="margin-top:0;color:#5A0817;">ðŸ›’ Ø¥ØµØ¯Ø§Ø± ÙØ§ØªÙˆØ±Ø© Ù…Ø¨ÙŠØ¹Ø§Øª Ø³Ø­Ø§Ø¨ÙŠØ©</h3>
                 <form id="f-pos" onsubmit="handlePosSubmit(event)">
-                    <label>العميل / المشتري</label>
+                    <label>Ø§Ù„Ø¹Ù…ÙŠÙ„ / Ø§Ù„Ù…Ø´ØªØ±ÙŠ</label>
                     <select name="Customer" id="posCustSelect" required>
-                        <option value="عميل نقدي">عميل نقدي</option>
-                        ${customers.map(c => `<option value="${esc(getName(c))}">${esc(getName(c))} (مديونية: ${getBalance(c).toLocaleString()} ج)</option>`).join('')}
+                        <option value="Ø¹Ù…ÙŠÙ„ Ù†Ù‚Ø¯ÙŠ">Ø¹Ù…ÙŠÙ„ Ù†Ù‚Ø¯ÙŠ</option>
+                        ${customers.map(c => `<option value="${esc(getName(c))}">${esc(getName(c))} (Ù…Ø¯ÙŠÙˆÙ†ÙŠØ©: ${getBalance(c).toLocaleString()} Ø¬)</option>`).join('')}
                     </select>
 
-                    <label>سيارة المورد / الحمولة</label>
+                    <label>Ø³ÙŠØ§Ø±Ø© Ø§Ù„Ù…ÙˆØ±Ø¯ / Ø§Ù„Ø­Ù…ÙˆÙ„Ø©</label>
                     <select name="LoadKey" id="posLoadSelect">
-                        <option value="" data-supplier="">مبيعات مباشرة (بدون سيارة)</option>
+                        <option value="" data-supplier="">Ù…Ø¨ÙŠØ¹Ø§Øª Ù…Ø¨Ø§Ø´Ø±Ø© (Ø¨Ø¯ÙˆÙ† Ø³ÙŠØ§Ø±Ø©)</option>
                         ${loads.map(l => `<option value="${esc(getSupplier(l))} | ${esc(getVehicle(l))} | ${esc(getDate(l))}" data-supplier="${esc(getSupplier(l))}">${esc(getSupplier(l))} | ${esc(getVehicle(l))} (${esc(getItem(l))})</option>`).join('')}
                     </select>
 
-                    <label>الصنف</label>
+                    <label>Ø§Ù„ØµÙ†Ù</label>
                     <select name="Item" id="posItemSelect" required>
                         ${items.map(i => `<option value="${esc(getName(i))}" data-supplier="${esc(getSupplier(i))}" data-price="${getPrice(i)}">${esc(getName(i))} - [${esc(getSupplier(i))}]</option>`).join('')}
                     </select>
 
                     <div class="grid-2">
                         <div>
-                            <label>العدد (صناديق)</label>
+                            <label>Ø§Ù„Ø¹Ø¯Ø¯ (ØµÙ†Ø§Ø¯ÙŠÙ‚)</label>
                             <input type="number" name="Qty" id="posQty" value="0" step="1" oninput="calcPosTotal()" />
                         </div>
                         <div>
-                            <label>الوزن (كجم)</label>
+                            <label>Ø§Ù„ÙˆØ²Ù† (ÙƒØ¬Ù…)</label>
                             <input type="number" name="Weight" id="posWeight" value="0" step="0.1" oninput="calcPosTotal()" />
                         </div>
                     </div>
 
                     <div class="grid-2">
                         <div>
-                            <label>السعر (جنيه)</label>
+                            <label>Ø§Ù„Ø³Ø¹Ø± (Ø¬Ù†ÙŠÙ‡)</label>
                             <input type="number" name="Price" id="posPrice" value="0" step="0.5" required oninput="calcPosTotal()" />
                         </div>
                         <div>
-                            <label>الخصم</label>
+                            <label>Ø§Ù„Ø®ØµÙ…</label>
                             <input type="number" name="Discount" id="posDisc" value="0" step="1" oninput="calcPosTotal()" />
                         </div>
                     </div>
 
-                    <label>طريقة السداد</label>
+                    <label>Ø·Ø±ÙŠÙ‚Ø© Ø§Ù„Ø³Ø¯Ø§Ø¯</label>
                     <select name="PaymentMethod" id="posPayMethod" onchange="calcPosTotal()">
-                        <option value="نقدي (كاش)">نقدي (كاش)</option>
-                        <option value="آجل على الحساب">آجل على الحساب</option>
-                        <option value="إنستاباي (InstaPay)">إنستاباي (InstaPay)</option>
-                        <option value="فودافون كاش / محفظة">فودافون كاش / محفظة</option>
+                        <option value="Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)">Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)</option>
+                        <option value="Ø¢Ø¬Ù„ Ø¹Ù„Ù‰ Ø§Ù„Ø­Ø³Ø§Ø¨">Ø¢Ø¬Ù„ Ø¹Ù„Ù‰ Ø§Ù„Ø­Ø³Ø§Ø¨</option>
+                        <option value="Ø¥Ù†Ø³ØªØ§Ø¨Ø§ÙŠ (InstaPay)">Ø¥Ù†Ø³ØªØ§Ø¨Ø§ÙŠ (InstaPay)</option>
+                        <option value="ÙÙˆØ¯Ø§ÙÙˆÙ† ÙƒØ§Ø´ / Ù…Ø­ÙØ¸Ø©">ÙÙˆØ¯Ø§ÙÙˆÙ† ÙƒØ§Ø´ / Ù…Ø­ÙØ¸Ø©</option>
                     </select>
 
                     <div class="card" style="margin-top:12px;background:#FDF4DF;border-right-color:#D4AF37;">
-                        <div>الإجمالي المطلوب: <b id="posTotalTxt" style="font-size:18px;color:#5A0817;">0 ج</b></div>
+                        <div>Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ Ø§Ù„Ù…Ø·Ù„ÙˆØ¨: <b id="posTotalTxt" style="font-size:18px;color:#5A0817;">0 Ø¬</b></div>
                     </div>
 
-                    <button type="submit" class="submit-btn">💾 حفظ الفاتورة وتمريرها للسيرفر</button>
+                    <button type="submit" class="submit-btn">ðŸ’¾ Ø­ÙØ¸ Ø§Ù„ÙØ§ØªÙˆØ±Ø© ÙˆØªÙ…Ø±ÙŠØ±Ù‡Ø§ Ù„Ù„Ù…Ø²Ø§Ù…Ù†Ø©</button>
                 </form>
             </div>
         </div>
 
-        <!-- 3. سجل المبيعات واليومية المفصلة -->
+        <!-- 3. Ø³Ø¬Ù„ Ø§Ù„Ù…Ø¨ÙŠØ¹Ø§Øª ÙˆØ§Ù„ÙŠÙˆÙ…ÙŠØ© Ø§Ù„Ù…ÙØµÙ„Ø© -->
         <div id="tab-sales-reg" class="tab-content">
             <div style="display:flex;justify-content:space-between;align-items:center;">
-                <h3 style="margin:0;">📋 سجل فواتير المبيعات</h3>
+                <h3 style="margin:0;">ðŸ“‹ Ø³Ø¬Ù„ ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ù…Ø¨ÙŠØ¹Ø§Øª</h3>
                 <span id="salesSummaryBadge" style="font-weight:bold;color:#5A0817;"></span>
             </div>
             <table>
                 <thead>
-                    <tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الصنف</th><th>الوزن</th><th>الإجمالي</th><th>المدفوع</th><th>إجراء</th></tr>
+                    <tr><th>Ø§Ù„ÙØ§ØªÙˆØ±Ø©</th><th>Ø§Ù„ØªØ§Ø±ÙŠØ®</th><th>Ø§Ù„Ø¹Ù…ÙŠÙ„</th><th>Ø§Ù„ØµÙ†Ù</th><th>Ø§Ù„ÙˆØ²Ù†</th><th>Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ</th><th>Ø§Ù„Ù…Ø¯ÙÙˆØ¹</th><th>Ø¥Ø¬Ø±Ø§Ø¡</th></tr>
                 </thead>
                 <tbody id="salesTableBody">
                     ${recentSales.map(s => `
@@ -944,139 +1082,138 @@ th { background: #5A0817; color: white; }
                             <td>${esc(s.Date || s.date)}</td>
                             <td>${esc(s.Customer || s.customer)}</td>
                             <td>${esc(s.Item || s.item)}</td>
-                            <td>${Number(s.Weight || s.weight || 0).toLocaleString()} ك</td>
-                            <td>${Number(s.Value || s.value || 0).toLocaleString()} ج</td>
-                            <td>${Number(s.PaidAmount || s.paidAmount || 0).toLocaleString()} ج</td>
-                            <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteInvoiceAction('${esc(s.InvoiceNo || s.invoiceNo)}')">🗑️ حذف</button></td>
+                            <td>${Number(s.Weight || s.weight || 0).toLocaleString()} Ùƒ</td>
+                            <td>${Number(s.Value || s.value || 0).toLocaleString()} Ø¬</td>
+                            <td>${Number(s.PaidAmount || s.paidAmount || 0).toLocaleString()} Ø¬</td>
+                            <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteInvoiceAction('${esc(s.InvoiceNo || s.invoiceNo)}')">ðŸ—‘ï¸ Ø­Ø°Ù</button></td>
                         </tr>
                     `).join('')}
                 </tbody>
             </table>
         </div>
 
-        <!-- 4. ساحة توريد وتنزيل السيارات (سلة أصناف متعددة) -->
+        <!-- 4. Ø³Ø§Ø­Ø© ØªÙˆØ±ÙŠØ¯ Ø§Ù„Ø³ÙŠØ§Ø±Ø§Øª -->
         <div id="tab-load" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">🚚 توريد وتنزيل سيارة بالأرضية (سلة أصناف متعددة)</h3>
-                
+                <h3 style="margin-top:0;color:#5A0817;">ðŸšš ØªÙˆØ±ÙŠØ¯ ÙˆØªÙ†Ø²ÙŠÙ„ Ø³ÙŠØ§Ø±Ø© Ø¨Ø§Ù„Ø£Ø±Ø¶ÙŠØ©</h3>
                 <div class="grid-2">
                     <div>
-                        <label>المورد / التاجر</label>
+                        <label>Ø§Ù„Ù…ÙˆØ±Ø¯ / Ø§Ù„ØªØ§Ø¬Ø±</label>
                         <select id="loadSuppSelect" required>
                             ${suppliers.map(s => `<option value="${esc(getName(s))}">${esc(getName(s))}</option>`).join('')}
                         </select>
                     </div>
                     <div>
-                        <label>رقم / بيان السيارة</label>
-                        <input type="text" id="loadVehInput" placeholder="مثال: 5412 نقل" required />
+                        <label>Ø±Ù‚Ù… / Ø¨ÙŠØ§Ù† Ø§Ù„Ø³ÙŠØ§Ø±Ø©</label>
+                        <input type="text" id="loadVehInput" placeholder="Ù…Ø«Ø§Ù„: 5412 Ù†Ù‚Ù„" required />
                     </div>
                 </div>
 
                 <div class="grid-2">
                     <div>
-                        <label>نولون النقل الإجمالي (ج)</label>
+                        <label>Ù†ÙˆÙ„ÙˆÙ† Ø§Ù„Ù†Ù‚Ù„ Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ (Ø¬)</label>
                         <input type="number" id="loadFreightInput" value="0" />
                     </div>
                     <div>
-                        <label>نسبة العمولة (%)</label>
+                        <label>Ù†Ø³Ø¨Ø© Ø§Ù„Ø¹Ù…ÙˆÙ„Ø© (%)</label>
                         <input type="number" id="loadCommInput" value="5" step="0.5" />
                     </div>
                 </div>
 
                 <div style="background:#F9FAFB;border:1px solid #D4AF37;border-radius:8px;padding:10px;margin-top:12px;">
-                    <h4 style="margin:0 0 8px 0;color:#5A0817;">📦 إضافة صنف لحمولة السيارة:</h4>
+                    <h4 style="margin:0 0 8px 0;color:#5A0817;">ðŸ“¦ Ø¥Ø¶Ø§ÙØ© ØµÙ†Ù Ù„Ø­Ù…ÙˆÙ„Ø© Ø§Ù„Ø³ÙŠØ§Ø±Ø©:</h4>
                     <div class="grid-2">
                         <div>
-                            <label>الصنف</label>
+                            <label>Ø§Ù„ØµÙ†Ù</label>
                             <select id="loadItemSelect">
                                 ${items.map(i => `<option value="${esc(getName(i))}">${esc(getName(i))}</option>`).join('')}
                             </select>
                         </div>
                         <div>
-                            <label>العدد الوارد (صناديق)</label>
+                            <label>Ø§Ù„Ø¹Ø¯Ø¯ Ø§Ù„ÙˆØ§Ø±Ø¯ (ØµÙ†Ø§Ø¯ÙŠÙ‚)</label>
                             <input type="number" id="loadItemQty" value="50" step="1" />
                         </div>
                     </div>
                     <div>
-                        <label>الوزن الوارد (كجم)</label>
+                        <label>Ø§Ù„ÙˆØ²Ù† Ø§Ù„ÙˆØ§Ø±Ø¯ (ÙƒØ¬Ù…)</label>
                         <input type="number" id="loadItemWt" value="1250" step="0.5" />
                     </div>
-                    <button type="button" class="btn" style="background:#0D7857;margin-top:10px;" onclick="addItemToLoadCart()">➕ إضافة الصنف للسيارة</button>
+                    <button type="button" class="btn" style="background:#0D7857;margin-top:10px;" onclick="addItemToLoadCart()">âž• Ø¥Ø¶Ø§ÙØ© Ø§Ù„ØµÙ†Ù Ù„Ù„Ø³ÙŠØ§Ø±Ø©</button>
                 </div>
 
-                <h4 style="margin:12px 0 4px 0;">الأصناف المحملة على هذه السيارة:</h4>
+                <h4 style="margin:12px 0 4px 0;">Ø§Ù„Ø£ØµÙ†Ø§Ù Ø§Ù„Ù…Ø­Ù…Ù„Ø©:</h4>
                 <table id="loadItemsTable">
-                    <thead><tr><th>الصنف</th><th>العدد</th><th>الوزن</th><th>حذف</th></tr></thead>
+                    <thead><tr><th>Ø§Ù„ØµÙ†Ù</th><th>Ø§Ù„Ø¹Ø¯Ø¯</th><th>Ø§Ù„ÙˆØ²Ù†</th><th>Ø­Ø°Ù</th></tr></thead>
                     <tbody id="loadItemsTbody">
-                        <tr><td colspan="4" style="text-align:center;color:#666;">لم يتم إضافة أصناف للسيارة بعد</td></tr>
+                        <tr><td colspan="4" style="text-align:center;color:#666;">Ù„Ù… ÙŠØªÙ… Ø¥Ø¶Ø§ÙØ© Ø£ØµÙ†Ø§Ù Ù„Ù„Ø³ÙŠØ§Ø±Ø© Ø¨Ø¹Ø¯</td></tr>
                     </tbody>
                 </table>
 
-                <button type="button" class="submit-btn" style="margin-top:16px;" onclick="submitFullVehicleLoad()">🚚 تثبيت وحفظ السيارة بالأرضية بالكامل</button>
+                <button type="button" class="submit-btn" style="margin-top:16px;" onclick="submitFullVehicleLoad()">ðŸšš ØªØ«Ø¨ÙŠØª ÙˆØ­ÙØ¸ Ø§Ù„Ø³ÙŠØ§Ø±Ø© Ø¨Ø§Ù„Ø£Ø±Ø¶ÙŠØ©</button>
             </div>
         </div>
 
-        <!-- 5. تصفية سيارات الأمانة والتوالف -->
+        <!-- 5. ØªØµÙÙŠØ© Ø³ÙŠØ§Ø±Ø§Øª Ø§Ù„Ø£Ù…Ø§Ù†Ø© -->
         <div id="tab-settle" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">🚛 تصفية وإقفال سيارة أمانة وحساب الفلاح</h3>
-                <label>اختر السيارة للتصفية</label>
+                <h3 style="margin-top:0;color:#5A0817;">ðŸš› ØªØµÙÙŠØ© ÙˆØ¥Ù‚ÙØ§Ù„ Ø³ÙŠØ§Ø±Ø© Ø£Ù…Ø§Ù†Ø©</h3>
+                <label>Ø§Ø®ØªØ± Ø§Ù„Ø³ÙŠØ§Ø±Ø© Ù„Ù„ØªØµÙÙŠØ©</label>
                 <select id="settleLoadSelect" onchange="updateSettlePreview()">
-                    <option value="">-- اختر السيارة --</option>
+                    <option value="">-- Ø§Ø®ØªØ± Ø§Ù„Ø³ÙŠØ§Ø±Ø© --</option>
                     ${loads.map(l => `<option value="${esc(getSupplier(l))} | ${esc(getVehicle(l))} | ${esc(getDate(l))}" data-supplier="${esc(getSupplier(l))}" data-vehicle="${esc(getVehicle(l))}" data-freight="${l.Freight || l.freight || 0}" data-comm="${l.Commission || l.commission || 5}">${esc(getSupplier(l))} | ${esc(getVehicle(l))} (${esc(getItem(l))})</option>`).join('')}
                 </select>
                 <div id="settlePreviewBox" style="margin-top:12px;display:none;" class="card">
-                    <div>المورد: <b id="settleSuppTxt"></b></div>
-                    <div>نولون النقل: <b id="settleFreightTxt">0 ج</b></div>
-                    <div>نسبة العمولة: <b id="settleCommTxt">5%</b></div>
+                    <div>Ø§Ù„Ù…ÙˆØ±Ø¯: <b id="settleSuppTxt"></b></div>
+                    <div>Ù†ÙˆÙ„ÙˆÙ† Ø§Ù„Ù†Ù‚Ù„: <b id="settleFreightTxt">0 Ø¬</b></div>
+                    <div>Ù†Ø³Ø¨Ø© Ø§Ù„Ø¹Ù…ÙˆÙ„Ø©: <b id="settleCommTxt">5%</b></div>
                 </div>
             </div>
         </div>
 
-        <!-- 6. جرد بضاعة الأرضية اللحظي -->
+        <!-- 6. Ø¬Ø±Ø¯ Ø¨Ø¶Ø§Ø¹Ø© Ø§Ù„Ø£Ø±Ø¶ÙŠØ© -->
         <div id="tab-stock" class="tab-content">
-            <h3>🚚 بضاعة الأرضية والسيارات المفتوحة (${esc(floorStock.length)})</h3>
+            <h3>ðŸšš Ø¨Ø¶Ø§Ø¹Ø© Ø§Ù„Ø£Ø±Ø¶ÙŠØ© ÙˆØ§Ù„Ø³ÙŠØ§Ø±Ø§Øª Ø§Ù„Ù…ÙØªÙˆØ­Ø© (${esc(floorStock.length)})</h3>
             <table>
-                <tr><th>الصنف</th><th>السيارة</th><th>المورد</th><th>باقي عدد</th><th>باقي وزن</th></tr>
+                <tr><th>Ø§Ù„ØµÙ†Ù</th><th>Ø§Ù„Ø³ÙŠØ§Ø±Ø©</th><th>Ø§Ù„Ù…ÙˆØ±Ø¯</th><th>Ø¨Ø§Ù‚ÙŠ Ø¹Ø¯Ø¯</th><th>Ø¨Ø§Ù‚ÙŠ ÙˆØ²Ù†</th></tr>
                 ${floorStock.map(f => `
                     <tr>
                         <td><b>${esc(f.Item || f.item)}</b></td>
                         <td>${esc(f.Vehicle || f.vehicle)}</td>
                         <td>${esc(f.Supplier || f.supplier)}</td>
-                        <td>${Number(f.QtyRemaining || f.qtyRemaining || 0).toLocaleString()} ق</td>
-                        <td>${Number(f.WeightRemaining || f.weightRemaining || 0).toLocaleString()} ك</td>
+                        <td>${Number(f.QtyRemaining || f.qtyRemaining || 0).toLocaleString()} Ù‚</td>
+                        <td>${Number(f.WeightRemaining || f.weightRemaining || 0).toLocaleString()} Ùƒ</td>
                     </tr>
                 `).join('')}
             </table>
         </div>
 
-        <!-- 7. سندات التحصيل والمقبوضات -->
+        <!-- 7. Ø³Ù†Ø¯Ø§Øª Ø§Ù„ØªØ­ØµÙŠÙ„ ÙˆØ§Ù„Ù…Ù‚Ø¨ÙˆØ¶Ø§Øª -->
         <div id="tab-col" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">🧾 تسجيل سند قبض وتحصيل</h3>
+                <h3 style="margin-top:0;color:#5A0817;">ðŸ§¾ ØªØ³Ø¬ÙŠÙ„ Ø³Ù†Ø¯ Ù‚Ø¨Ø¶ ÙˆØªØ­ØµÙŠÙ„</h3>
                 <form onsubmit="handleColSubmit(event)">
-                    <label>العميل</label>
+                    <label>Ø§Ù„Ø¹Ù…ÙŠÙ„</label>
                     <select name="Customer" required>
-                        ${customers.map(c => `<option value="${esc(getName(c))}">${esc(getName(c))} (مديونية: ${getBalance(c).toLocaleString()} ج)</option>`).join('')}
+                        ${customers.map(c => `<option value="${esc(getName(c))}">${esc(getName(c))} (Ù…Ø¯ÙŠÙˆÙ†ÙŠØ©: ${getBalance(c).toLocaleString()} Ø¬)</option>`).join('')}
                     </select>
-                    <label>المبلغ المحصل (جنيه)</label>
+                    <label>Ø§Ù„Ù…Ø¨Ù„Øº Ø§Ù„Ù…Ø­ØµÙ„ (Ø¬Ù†ÙŠÙ‡)</label>
                     <input type="number" name="Amount" step="1" required />
-                    <label>طريقة الدفع</label>
+                    <label>Ø·Ø±ÙŠÙ‚Ø© Ø§Ù„Ø¯ÙØ¹</label>
                     <select name="PaymentMethod">
-                        <option value="نقدي (كاش)">نقدي (كاش)</option>
-                        <option value="إنستاباي (InstaPay)">إنستاباي (InstaPay)</option>
-                        <option value="فودافون كاش / محفظة">فودافون كاش / محفظة</option>
+                        <option value="Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)">Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)</option>
+                        <option value="Ø¥Ù†Ø³ØªØ§Ø¨Ø§ÙŠ (InstaPay)">Ø¥Ù†Ø³ØªØ§Ø¨Ø§ÙŠ (InstaPay)</option>
+                        <option value="ÙÙˆØ¯Ø§ÙÙˆÙ† ÙƒØ§Ø´ / Ù…Ø­ÙØ¸Ø©">ÙÙˆØ¯Ø§ÙÙˆÙ† ÙƒØ§Ø´ / Ù…Ø­ÙØ¸Ø©</option>
                     </select>
-                    <label>البيان / ملاحظات</label>
-                    <input type="text" name="Notes" value="سداد دفعة بالحساب" />
-                    <button type="submit" class="submit-btn">🧾 حفظ وتأكيد سند القبض</button>
+                    <label>Ø§Ù„Ø¨ÙŠØ§Ù† / Ù…Ù„Ø§Ø­Ø¸Ø§Øª</label>
+                    <input type="text" name="Notes" value="Ø³Ø¯Ø§Ø¯ Ø¯ÙØ¹Ø© Ø¨Ø§Ù„Ø­Ø³Ø§Ø¨" />
+                    <button type="submit" class="submit-btn">ðŸ§¾ Ø­ÙØ¸ ÙˆØªØ£ÙƒÙŠØ¯ Ø³Ù†Ø¯ Ø§Ù„Ù‚Ø¨Ø¶</button>
                 </form>
             </div>
 
-            <h3>سندات التحصيل السابقة</h3>
+            <h3>Ø³Ù†Ø¯Ø§Øª Ø§Ù„ØªØ­ØµÙŠÙ„ Ø§Ù„Ù…Ø³Ø¬Ù„Ø©</h3>
             <table>
                 <thead>
-                    <tr><th>رقم السند</th><th>التاريخ</th><th>العميل</th><th>المبلغ</th><th>طريقة الدفع</th><th>إجراء</th></tr>
+                    <tr><th>Ø±Ù‚Ù… Ø§Ù„Ø³Ù†Ø¯</th><th>Ø§Ù„ØªØ§Ø±ÙŠØ®</th><th>Ø§Ù„Ø¹Ù…ÙŠÙ„</th><th>Ø§Ù„Ù…Ø¨Ù„Øº</th><th>Ø·Ø±ÙŠÙ‚Ø© Ø§Ù„Ø¯ÙØ¹</th><th>Ø¥Ø¬Ø±Ø§Ø¡</th></tr>
                 </thead>
                 <tbody id="colTableBody">
                     ${collections.map(c => `
@@ -1084,58 +1221,58 @@ th { background: #5A0817; color: white; }
                             <td><b>${esc(c.ReceiptNo || c.receiptNo)}</b></td>
                             <td>${esc(c.Date || c.date)}</td>
                             <td>${esc(c.Customer || c.customer)}</td>
-                            <td>${Number(c.Amount || c.amount || 0).toLocaleString()} ج</td>
+                            <td>${Number(c.Amount || c.amount || 0).toLocaleString()} Ø¬</td>
                             <td>${esc(c.PaymentMethod || c.paymentMethod)}</td>
-                            <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteColAction('${esc(c.ReceiptNo || c.receiptNo)}')">🗑️ حذف</button></td>
+                            <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteColAction('${esc(c.ReceiptNo || c.receiptNo)}')">ðŸ—‘ï¸ Ø­Ø°Ù</button></td>
                         </tr>
                     `).join('')}
                 </tbody>
             </table>
         </div>
 
-        <!-- 8. الفواتير الآجلة والذمم -->
+        <!-- 8. Ø§Ù„ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø¢Ø¬Ù„Ø© ÙˆØ§Ù„Ø°Ù…Ù… -->
         <div id="tab-pending" class="tab-content">
-            <h3>📄 كشف الفواتير الآجلة غير المسددة بالكامل</h3>
+            <h3>ðŸ“„ ÙƒØ´Ù Ø§Ù„ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ø¢Ø¬Ù„Ø© ØºÙŠØ± Ø§Ù„Ù…Ø³Ø¯Ø¯Ø© Ø¨Ø§Ù„ÙƒØ§Ù…Ù„</h3>
             <table>
-                <tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الإجمالي</th><th>المتبقي الآجل</th></tr>
+                <tr><th>Ø§Ù„ÙØ§ØªÙˆØ±Ø©</th><th>Ø§Ù„ØªØ§Ø±ÙŠØ®</th><th>Ø§Ù„Ø¹Ù…ÙŠÙ„</th><th>Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ</th><th>Ø§Ù„Ù…ØªØ¨Ù‚ÙŠ Ø§Ù„Ø¢Ø¬Ù„</th></tr>
                 ${recentSales.filter(s => (s.RemainingAmount || s.remainingAmount) > 0).map(s => `
                     <tr>
                         <td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td>
                         <td>${esc(s.Date || s.date)}</td>
                         <td>${esc(s.Customer || s.customer)}</td>
-                        <td>${Number(s.Value || s.value || 0).toLocaleString()} ج</td>
-                        <td style="color:#DC2626;font-weight:bold;">${Number(s.RemainingAmount || s.remainingAmount || 0).toLocaleString()} ج</td>
+                        <td>${Number(s.Value || s.value || 0).toLocaleString()} Ø¬</td>
+                        <td style="color:#DC2626;font-weight:bold;">${Number(s.RemainingAmount || s.remainingAmount || 0).toLocaleString()} Ø¬</td>
                     </tr>
                 `).join('')}
             </table>
         </div>
 
-        <!-- 9. الخزينة والمصروفات والرواتب -->
+        <!-- 9. Ø§Ù„Ø®Ø²ÙŠÙ†Ø© ÙˆØ§Ù„Ù…ØµØ±ÙˆÙØ§Øª ÙˆØ§Ù„Ø±ÙˆØ§ØªØ¨ -->
         <div id="tab-exp" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">💸 صرف وتسجيل مصروف</h3>
+                <h3 style="margin-top:0;color:#5A0817;">ðŸ’¸ ØµØ±Ù ÙˆØªØ³Ø¬ÙŠÙ„ Ù…ØµØ±ÙˆÙ</h3>
                 <form onsubmit="handleExpSubmit(event)">
-                    <label>بند المصروف</label>
+                    <label>Ø¨Ù†Ø¯ Ø§Ù„Ù…ØµØ±ÙˆÙ</label>
                     <select name="Category">
-                        <option value="إكراميات وعتالة الأرضية">إكراميات وعتالة الأرضية</option>
-                        <option value="بوفيه وضيافة">بوفيه وضيافة</option>
-                        <option value="نولون ونقل">نولون ونقل</option>
-                        <option value="صيانة ومستلزمات">صيانة ومستلزمات</option>
-                        <option value="رواتب موظفين وعمال">رواتب موظفين وعمال</option>
-                        <option value="مصاريف نثرية عامة">مصاريف نثرية عامة</option>
+                        <option value="Ø¥ÙƒØ±Ø§Ù…ÙŠØ§Øª ÙˆØ¹ØªØ§Ù„Ø© Ø§Ù„Ø£Ø±Ø¶ÙŠØ©">Ø¥ÙƒØ±Ø§Ù…ÙŠØ§Øª ÙˆØ¹ØªØ§Ù„Ø© Ø§Ù„Ø£Ø±Ø¶ÙŠØ©</option>
+                        <option value="Ø¨ÙˆÙÙŠÙ‡ ÙˆØ¶ÙŠØ§ÙØ©">Ø¨ÙˆÙÙŠÙ‡ ÙˆØ¶ÙŠØ§ÙØ©</option>
+                        <option value="Ù†ÙˆÙ„ÙˆÙ† ÙˆÙ†Ù‚Ù„">Ù†ÙˆÙ„ÙˆÙ† ÙˆÙ†Ù‚Ù„</option>
+                        <option value="ØµÙŠØ§Ù†Ø© ÙˆÙ…Ø³ØªÙ„Ø²Ù…Ø§Øª">ØµÙŠØ§Ù†Ø© ÙˆÙ…Ø³ØªÙ„Ø²Ù…Ø§Øª</option>
+                        <option value="Ø±ÙˆØ§ØªØ¨ Ù…ÙˆØ¸ÙÙŠÙ† ÙˆØ¹Ù…Ø§Ù„">Ø±ÙˆØ§ØªØ¨ Ù…ÙˆØ¸ÙÙŠÙ† ÙˆØ¹Ù…Ø§Ù„</option>
+                        <option value="Ù…ØµØ§Ø±ÙŠÙ Ù†Ø«Ø±ÙŠØ© Ø¹Ø§Ù…Ø©">Ù…ØµØ§Ø±ÙŠÙ Ù†Ø«Ø±ÙŠØ© Ø¹Ø§Ù…Ø©</option>
                     </select>
-                    <label>البيان / تفاصيل الصرف</label>
+                    <label>Ø§Ù„Ø¨ÙŠØ§Ù† / ØªÙØ§ØµÙŠÙ„ Ø§Ù„ØµØ±Ù</label>
                     <input type="text" name="Description" required />
-                    <label>المبلغ المنصرف (جنيه)</label>
+                    <label>Ø§Ù„Ù…Ø¨Ù„Øº Ø§Ù„Ù…Ù†ØµØ±Ù (Ø¬Ù†ÙŠÙ‡)</label>
                     <input type="number" name="Amount" step="1" required />
-                    <button type="submit" class="submit-btn">💸 خصم وصرف المصروف</button>
+                    <button type="submit" class="submit-btn">ðŸ’¸ Ø®ØµÙ… ÙˆØµØ±Ù Ø§Ù„Ù…ØµØ±ÙˆÙ</button>
                 </form>
             </div>
 
-            <h3>المصروفات المسجلة</h3>
+            <h3>Ø§Ù„Ù…ØµØ±ÙˆÙØ§Øª Ø§Ù„Ù…Ø³Ø¬Ù„Ø©</h3>
             <table>
                 <thead>
-                    <tr><th>التاريخ</th><th>البند</th><th>البيان</th><th>المبلغ</th><th>إجراء</th></tr>
+                    <tr><th>Ø§Ù„ØªØ§Ø±ÙŠØ®</th><th>Ø§Ù„Ø¨Ù†Ø¯</th><th>Ø§Ù„Ø¨ÙŠØ§Ù†</th><th>Ø§Ù„Ù…Ø¨Ù„Øº</th><th>Ø¥Ø¬Ø±Ø§Ø¡</th></tr>
                 </thead>
                 <tbody id="expTableBody">
                     ${expenses.map(e => `
@@ -1143,169 +1280,173 @@ th { background: #5A0817; color: white; }
                             <td>${esc(e.Date || e.date)}</td>
                             <td>${esc(e.Category || e.category)}</td>
                             <td>${esc(e.Description || e.description)}</td>
-                            <td>${Number(e.Amount || e.amount || 0).toLocaleString()} ج</td>
-                            <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteExpAction(${e.Id || e.id || 0})">🗑️ حذف</button></td>
+                            <td>${Number(e.Amount || e.amount || 0).toLocaleString()} Ø¬</td>
+                            <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteExpAction(${e.Id || e.id || 0})">ðŸ—‘ï¸ Ø­Ø°Ù</button></td>
                         </tr>
                     `).join('')}
                 </tbody>
             </table>
         </div>
 
-        <!-- 10. فواتير المشتريات والأصول -->
+        <!-- 10. ÙÙˆØ§ØªÙŠØ± Ø§Ù„Ù…Ø´ØªØ±ÙŠØ§Øª -->
         <div id="tab-pur" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">📥 تسجيل فاتورة شراء بضاعة وأصول</h3>
+                <h3 style="margin-top:0;color:#5A0817;">ðŸ“¥ ØªØ³Ø¬ÙŠÙ„ ÙØ§ØªÙˆØ±Ø© Ø´Ø±Ø§Ø¡ Ø¨Ø¶Ø§Ø¹Ø© ÙˆØ£ØµÙˆÙ„</h3>
                 <form onsubmit="handlePurSubmit(event)">
-                    <label>بند الشراء</label>
+                    <label>Ø¨Ù†Ø¯ Ø§Ù„Ø´Ø±Ø§Ø¡</label>
                     <select name="Category">
-                        <option value="شراء بضاعة تجارية (تضاف للأرضية)">شراء بضاعة تجارية (تضاف للأرضية)</option>
-                        <option value="شراء أثاث وديكور">شراء أثاث وديكور</option>
-                        <option value="شراء أجهزة وموازين">شراء أجهزة وموازين</option>
+                        <option value="Ø´Ø±Ø§Ø¡ Ø¨Ø¶Ø§Ø¹Ø© ØªØ¬Ø§Ø±ÙŠØ© (ØªØ¶Ø§Ù Ù„Ù„Ø£Ø±Ø¶ÙŠØ©)">Ø´Ø±Ø§Ø¡ Ø¨Ø¶Ø§Ø¹Ø© ØªØ¬Ø§Ø±ÙŠØ© (ØªØ¶Ø§Ù Ù„Ù„Ø£Ø±Ø¶ÙŠØ©)</option>
+                        <option value="Ø´Ø±Ø§Ø¡ Ø£Ø«Ø§Ø« ÙˆØ¯ÙŠÙƒÙˆØ±">Ø´Ø±Ø§Ø¡ Ø£Ø«Ø§Ø« ÙˆØ¯ÙŠÙƒÙˆØ±</option>
+                        <option value="Ø´Ø±Ø§Ø¡ Ø£Ø¬Ù‡Ø²Ø© ÙˆÙ…ÙˆØ§Ø²ÙŠÙ†">Ø´Ø±Ø§Ø¡ Ø£Ø¬Ù‡Ø²Ø© ÙˆÙ…ÙˆØ§Ø²ÙŠÙ†</option>
                     </select>
-                    <label>المورد / الجهة</label>
+                    <label>Ø§Ù„Ù…ÙˆØ±Ø¯ / Ø§Ù„Ø¬Ù‡Ø©</label>
                     <select name="Supplier" required>
                         ${suppliers.map(s => `<option value="${esc(getName(s))}">${esc(getName(s))}</option>`).join('')}
                     </select>
-                    <label>الصنف / البيان</label>
+                    <label>Ø§Ù„ØµÙ†Ù / Ø§Ù„Ø¨ÙŠØ§Ù†</label>
                     <input type="text" name="Item" required />
                     <div class="grid-2">
                         <div>
-                            <label>الكمية</label>
+                            <label>Ø§Ù„ÙƒÙ…ÙŠØ©</label>
                             <input type="number" name="Qty" value="1" />
                         </div>
                         <div>
-                            <label>الوزن (كجم)</label>
+                            <label>Ø§Ù„ÙˆØ²Ù† (ÙƒØ¬Ù…)</label>
                             <input type="number" name="Weight" value="0" />
                         </div>
                     </div>
                     <div class="grid-2">
                         <div>
-                            <label>إجمالي القيمة (ج)</label>
+                            <label>Ø¥Ø¬Ù…Ø§Ù„ÙŠ Ø§Ù„Ù‚ÙŠÙ…Ø© (Ø¬)</label>
                             <input type="number" name="Value" step="1" required />
                         </div>
                         <div>
-                            <label>المدفوع نقداً</label>
+                            <label>Ø§Ù„Ù…Ø¯ÙÙˆØ¹ Ù†Ù‚Ø¯Ø§Ù‹</label>
                             <input type="number" name="PaidAmount" value="0" />
                         </div>
                     </div>
-                    <button type="submit" class="submit-btn">📥 حفظ فاتورة الشراء</button>
+                    <button type="submit" class="submit-btn">ðŸ“¥ Ø­ÙØ¸ ÙØ§ØªÙˆØ±Ø© Ø§Ù„Ø´Ø±Ø§Ø¡</button>
                 </form>
             </div>
         </div>
 
-        <!-- 11. حركة وتأمين الصناديق والبرانيك -->
+        <!-- 11. Ø­Ø±ÙƒØ© Ø§Ù„ØµÙ†Ø§Ø¯ÙŠÙ‚ ÙˆØ§Ù„Ø¨Ø±Ø§Ù†ÙŠÙƒ -->
         <div id="tab-crate" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">📦 حركة وتأمين الصناديق والبرانيك</h3>
+                <h3 style="margin-top:0;color:#5A0817;">ðŸ“¦ Ø­Ø±ÙƒØ© ÙˆØªØ£Ù…ÙŠÙ† Ø§Ù„ØµÙ†Ø§Ø¯ÙŠÙ‚ ÙˆØ§Ù„Ø¨Ø±Ø§Ù†ÙŠÙƒ</h3>
                 <form onsubmit="handleCrateSubmit(event)">
-                    <label>العميل</label>
+                    <label>Ø§Ù„Ø¹Ù…ÙŠÙ„</label>
                     <select name="Customer" required>
                         ${customers.map(c => `<option value="${esc(getName(c))}">${esc(getName(c))}</option>`).join('')}
                     </select>
-                    <label>نوع الحركة</label>
+                    <label>Ù†ÙˆØ¹ Ø§Ù„Ø­Ø±ÙƒØ©</label>
                     <select name="Kind">
-                        <option value="تسليم">تسليم للعميل (+)</option>
-                        <option value="استرجاع">استرجاع من العميل (-)</option>
+                        <option value="ØªØ³Ù„ÙŠÙ…">ØªØ³Ù„ÙŠÙ… Ù„Ù„Ø¹Ù…ÙŠÙ„ (+)</option>
+                        <option value="Ø§Ø³ØªØ±Ø¬Ø§Ø¹">Ø§Ø³ØªØ±Ø¬Ø§Ø¹ Ù…Ù† Ø§Ù„Ø¹Ù…ÙŠÙ„ (-)</option>
                     </select>
                     <div class="grid-2">
                         <div>
-                            <label>عدد الصناديق</label>
+                            <label>Ø¹Ø¯Ø¯ Ø§Ù„ØµÙ†Ø§Ø¯ÙŠÙ‚</label>
                             <input type="number" name="Qty" value="0" step="1" required />
                         </div>
                         <div>
-                            <label>سعر التأمين (ج)</label>
+                            <label>Ø³Ø¹Ø± Ø§Ù„ØªØ£Ù…ÙŠÙ† (Ø¬)</label>
                             <input type="number" name="Price" value="70" />
                         </div>
                     </div>
-                    <button type="submit" class="submit-btn">📦 تثبيت حركة الصناديق</button>
+                    <label>
+                        <input type="checkbox" name="IsCashCollected" style="width:auto;margin-left:6px;" checked />
+                        ØªØ³ÙˆÙŠØ© Ø±Ù‡Ù† Ø§Ù„ØªØ£Ù…ÙŠÙ† Ù†Ù‚Ø¯Ø§Ù‹ Ø¨Ø§Ù„Ø¯Ø±Ø¬
+                    </label>
+                    <button type="submit" class="submit-btn">ðŸ“¦ ØªØ«Ø¨ÙŠØª Ø­Ø±ÙƒØ© Ø§Ù„ØµÙ†Ø§Ø¯ÙŠÙ‚</button>
                 </form>
             </div>
         </div>
 
-        <!-- 12. البنوك والشيكات ومراكز التكلفة -->
+        <!-- 12. Ø§Ù„Ø¨Ù†ÙˆÙƒ ÙˆØ§Ù„Ø´ÙŠÙƒØ§Øª -->
         <div id="tab-bank" class="tab-content">
-            <h3>🏦 الحسابات البنكية والشيكات</h3>
+            <h3>ðŸ¦ Ø§Ù„Ø­Ø³Ø§Ø¨Ø§Øª Ø§Ù„Ø¨Ù†ÙƒÙŠØ© Ø§Ù„Ø¬Ø§Ø±ÙŠØ©</h3>
             <table>
-                <tr><th>البنك / الحساب</th><th>رقم الحساب</th><th>الرصيد</th></tr>
+                <tr><th>Ø§Ù„Ø¨Ù†Ùƒ / Ø§Ù„Ø­Ø³Ø§Ø¨</th><th>Ø±Ù‚Ù… Ø§Ù„Ø­Ø³Ø§Ø¨</th><th>Ø§Ù„Ø±ØµÙŠØ¯</th></tr>
                 ${bankAccounts.map(b => `
                     <tr>
                         <td><b>${esc(b.BankName || b.bankName)}</b> (${esc(b.AccountName || b.accountName)})</td>
                         <td>${esc(b.AccountNumber || b.accountNumber)}</td>
-                        <td>${Number(b.Balance || b.balance || 0).toLocaleString()} ج</td>
+                        <td>${Number(b.Balance || b.balance || 0).toLocaleString()} Ø¬</td>
                     </tr>
                 `).join('')}
             </table>
         </div>
 
-        <!-- 13. ميزان بسكول السيارات -->
+        <!-- 13. Ù…ÙŠØ²Ø§Ù† Ø¨Ø³ÙƒÙˆÙ„ Ø§Ù„Ø³ÙŠØ§Ø±Ø§Øª -->
         <div id="tab-wb" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">⚖️ تسجيل كارتة ميزان بسكول</h3>
+                <h3 style="margin-top:0;color:#5A0817;">âš–ï¸ ØªØ³Ø¬ÙŠÙ„ ÙƒØ§Ø±ØªØ© Ù…ÙŠØ²Ø§Ù† Ø¨Ø³ÙƒÙˆÙ„</h3>
                 <form onsubmit="handleWbSubmit(event)">
-                    <label>رقم السيارة</label>
+                    <label>Ø±Ù‚Ù… Ø§Ù„Ø³ÙŠØ§Ø±Ø©</label>
                     <input type="text" name="Vehicle" required />
-                    <label>اسم السائق</label>
-                    <input type="text" name="DriverName" value="سائق حر" />
-                    <label>المورد</label>
+                    <label>Ø§Ø³Ù… Ø§Ù„Ø³Ø§Ø¦Ù‚</label>
+                    <input type="text" name="DriverName" value="Ø³Ø§Ø¦Ù‚ Ø­Ø±" />
+                    <label>Ø§Ù„Ù…ÙˆØ±Ø¯</label>
                     <select name="Supplier" required>
                         ${suppliers.map(s => `<option value="${esc(getName(s))}">${esc(getName(s))}</option>`).join('')}
                     </select>
-                    <label>الصنف</label>
+                    <label>Ø§Ù„ØµÙ†Ù</label>
                     <select name="Item" required>
                         ${items.map(i => `<option value="${esc(getName(i))}">${esc(getName(i))}</option>`).join('')}
                     </select>
                     <div class="grid-2">
                         <div>
-                            <label>الوزن القائم (كجم)</label>
+                            <label>Ø§Ù„ÙˆØ²Ù† Ø§Ù„Ù‚Ø§Ø¦Ù… (ÙƒØ¬Ù…)</label>
                             <input type="number" name="GrossWeight" step="10" required />
                         </div>
                         <div>
-                            <label>وزن الفارغ (كجم)</label>
+                            <label>ÙˆØ²Ù† Ø§Ù„ÙØ§Ø±Øº (ÙƒØ¬Ù…)</label>
                             <input type="number" name="TareWeight" step="10" required />
                         </div>
                     </div>
-                    <button type="submit" class="submit-btn">⚖️ إصدار وحفظ كارتة البسكول</button>
+                    <button type="submit" class="submit-btn">âš–ï¸ Ø¥ØµØ¯Ø§Ø± ÙˆØ­ÙØ¸ ÙƒØ§Ø±ØªØ© Ø§Ù„Ø¨Ø³ÙƒÙˆÙ„</button>
                 </form>
             </div>
         </div>
 
-        <!-- 14. دليل الحسابات (Master Data) -->
+        <!-- 14. Ø¯Ù„ÙŠÙ„ Ø§Ù„Ø­Ø³Ø§Ø¨Ø§Øª -->
         <div id="tab-master" class="tab-content">
-            <h3>👥 العملاء والموردين (${customers.length} عميل / ${suppliers.length} مورد)</h3>
+            <h3>ðŸ‘¥ Ø§Ù„Ø¹Ù…Ù„Ø§Ø¡ ÙˆØ§Ù„Ù…ÙˆØ±Ø¯ÙŠÙ† (${customers.length} Ø¹Ù…ÙŠÙ„ / ${suppliers.length} Ù…ÙˆØ±Ø¯)</h3>
             <table>
-                <tr><th>الاسم</th><th>الصفة</th><th>المديونية / الرصيد</th></tr>
-                ${customers.map(c => `<tr><td>${esc(getName(c))}</td><td>عميل</td><td>${getBalance(c).toLocaleString()} ج</td></tr>`).join('')}
-                ${suppliers.map(s => `<tr><td>${esc(getName(s))}</td><td>مورد</td><td>عمولة: ${esc(s.DefaultCommission || s.defaultCommission || 0)}%</td></tr>`).join('')}
+                <tr><th>Ø§Ù„Ø§Ø³Ù…</th><th>Ø§Ù„ØµÙØ©</th><th>Ø§Ù„Ù…Ø¯ÙŠÙˆÙ†ÙŠØ© / Ø§Ù„Ø±ØµÙŠØ¯</th></tr>
+                ${customers.map(c => `<tr><td>${esc(getName(c))}</td><td>Ø¹Ù…ÙŠÙ„</td><td>${getBalance(c).toLocaleString()} Ø¬</td></tr>`).join('')}
+                ${suppliers.map(s => `<tr><td>${esc(getName(s))}</td><td>Ù…ÙˆØ±Ø¯</td><td>Ø¹Ù…ÙˆÙ„Ø©: ${esc(s.DefaultCommission || s.defaultCommission || 0)}%</td></tr>`).join('')}
             </table>
         </div>
 
-        <!-- 15. إعدادات الطابعات والشبكة والطباعة من الهاتف -->
+        <!-- 15. Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§Ù„Ø·Ø§Ø¨Ø¹Ø§Øª ÙˆØ§Ù„Ø´Ø¨ÙƒØ© -->
         <div id="tab-printer" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">🖨️ إعدادات الطابعات والشبكة (Mobile &amp; Thermal Printing)</h3>
-                <label>مقاس الطباعة الافتراضي على الهاتف والمتصفح</label>
+                <h3 style="margin-top:0;color:#5A0817;">ðŸ–¨ï¸ Ø¥Ø¹Ø¯Ø§Ø¯Ø§Øª Ø§Ù„Ø·Ø§Ø¨Ø¹Ø§Øª ÙˆØ§Ù„Ø´Ø¨ÙƒØ© (Mobile &amp; Thermal Printing)</h3>
+                <label>Ù…Ù‚Ø§Ø³ Ø§Ù„Ø·Ø¨Ø§Ø¹Ø© Ø§Ù„Ø§ÙØªØ±Ø§Ø¶ÙŠ Ø¹Ù„Ù‰ Ø§Ù„Ù‡Ø§ØªÙ ÙˆØ§Ù„Ù…ØªØµÙØ­</label>
                 <select id="webPrinterSize" onchange="savePrinterPrefs()">
-                    <option value="80mm">حراري 80mm رول كاشير (بلوتوث / شبكة)</option>
-                    <option value="58mm">حراري 58mm رول صغير</option>
-                    <option value="A5">ورق عادي A5 (نصف ورقة)</option>
-                    <option value="A4">ورق عادي A4 (ورقة كاملة)</option>
+                    <option value="80mm">Ø­Ø±Ø§Ø±ÙŠ 80mm Ø±ÙˆÙ„ ÙƒØ§Ø´ÙŠØ± (Ø¨Ù„ÙˆØªÙˆØ« / Ø´Ø¨ÙƒØ©)</option>
+                    <option value="58mm">Ø­Ø±Ø§Ø±ÙŠ 58mm Ø±ÙˆÙ„ ØµØºÙŠØ±</option>
+                    <option value="A5">ÙˆØ±Ù‚ Ø¹Ø§Ø¯ÙŠ A5 (Ù†ØµÙ ÙˆØ±Ù‚Ø©)</option>
+                    <option value="A4">ÙˆØ±Ù‚ Ø¹Ø§Ø¯ÙŠ A4 (ÙˆØ±Ù‚Ø© ÙƒØ§Ù…Ù„Ø©)</option>
                 </select>
 
-                <label>عنوان IP طابعة الشبكة الحرارية (Network Thermal IP / اختياري)</label>
-                <input type="text" id="netPrinterIp" placeholder="مثال: 192.168.1.200:9100" onchange="savePrinterPrefs()" />
+                <label>Ø¹Ù†ÙˆØ§Ù† IP Ø·Ø§Ø¨Ø¹Ø© Ø§Ù„Ø´Ø¨ÙƒØ© Ø§Ù„Ø­Ø±Ø§Ø±ÙŠØ© (Network Thermal IP / Ø§Ø®ØªÙŠØ§Ø±ÙŠ)</label>
+                <input type="text" id="netPrinterIp" placeholder="Ù…Ø«Ø§Ù„: 192.168.1.200:9100" onchange="savePrinterPrefs()" />
 
-                <label>
-                    <input type="checkbox" id="chkAutoPrintWeb" onchange="savePrinterPrefs()" checked />
-                    تشغيل نافذة الطباعة تلقائياً فور حفظ الفاتورة على الهاتف
+                <label style="margin-top:12px;">
+                    <input type="checkbox" id="chkAutoPrintWeb" onchange="savePrinterPrefs()" style="width:auto;margin-left:6px;" checked />
+                    ØªØ´ØºÙŠÙ„ Ù†Ø§ÙØ°Ø© Ø§Ù„Ø·Ø¨Ø§Ø¹Ø© ØªÙ„Ù‚Ø§Ø¦ÙŠØ§Ù‹ ÙÙˆØ± Ø­ÙØ¸ Ø§Ù„ÙØ§ØªÙˆØ±Ø© Ø¹Ù„Ù‰ Ø§Ù„Ù‡Ø§ØªÙ
                 </label>
 
-                <button type="button" class="submit-btn" style="background:#0D7857;" onclick="testWebPrint()">🖨️ تجربة طباعة إيصال اختباري الآن</button>
+                <button type="button" class="submit-btn" style="background:#0D7857;" onclick="testWebPrint()">ðŸ–¨ï¸ ØªØ¬Ø±Ø¨Ø© Ø·Ø¨Ø§Ø¹Ø© Ø¥ÙŠØµØ§Ù„ Ø§Ø®ØªØ¨Ø§Ø±ÙŠ Ø§Ù„Ø¢Ù†</button>
             </div>
         </div>
     </div>
 
-    <!-- مساحة الطباعة المخفية المجهزة للفواتير -->
-    <div id="printArea"></div>
+    <!-- Ù…Ø³Ø§Ø­Ø© Ø§Ù„Ø·Ø¨Ø§Ø¹Ø© Ø§Ù„Ù…Ø®ÙÙŠØ© -->
+    <div id="printArea" style="display:none;"></div>
 
     <script>
     const AGENCY_KEY = "${esc(key)}";
@@ -1316,13 +1457,22 @@ th { background: #5A0817; color: white; }
         if (currentUser && currentUser.full_name) {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('mainAppScreen').style.display = 'block';
-            document.getElementById('activeUserLabel').innerHTML = '👤 الموظف: <b>' + currentUser.full_name + '</b> (' + (currentUser.job_title || currentUser.role) + ')';
+            document.getElementById('activeUserLabel').innerHTML = 'ðŸ‘¤ Ø§Ù„Ù…ÙˆØ¸Ù: <b>' + currentUser.full_name + '</b> (' + (currentUser.job_title || currentUser.role) + ')';
         } else {
             document.getElementById('loginScreen').style.display = 'flex';
             document.getElementById('mainAppScreen').style.display = 'none';
         }
     }
     syncScreenState();
+
+    function copyText(elemId) {
+        const el = document.getElementById(elemId);
+        if (!el) return;
+        el.select();
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(el.value).then(() => alert('ØªÙ… Ø§Ù„Ù†Ø³Ø® Ù„Ù„Ø­Ø§ÙØ¸Ø© Ø¨Ù†Ø¬Ø§Ø­!'));
+        }
+    }
 
     function syncSelectedUserText() {
         const sel = document.getElementById('loginUserSelect');
@@ -1334,7 +1484,7 @@ th { background: #5A0817; color: white; }
     async function handleUserLogin(e) {
         e.preventDefault();
         const msg = document.getElementById('loginErrorMsg');
-        msg.textContent = 'جاري التحقق من الحساب...';
+        msg.textContent = 'Ø¬Ø§Ø±ÙŠ Ø§Ù„ØªØ­Ù‚Ù‚ Ù…Ù† Ø§Ù„Ø­Ø³Ø§Ø¨...';
         try {
             const r = await fetch('/api/web/user-login', {
                 method: 'POST',
@@ -1346,19 +1496,19 @@ th { background: #5A0817; color: white; }
                 })
             });
             const j = await r.json();
-            if (!j.success) { msg.textContent = j.message || 'بيانات الدخول غير صحيحة'; return; }
+            if (!j.success) { msg.textContent = j.message || 'Ø¨ÙŠØ§Ù†Ø§Øª Ø§Ù„Ø¯Ø®ÙˆÙ„ ØºÙŠØ± ØµØ­ÙŠØ­Ø©'; return; }
             currentUser = j.user;
             localStorage.setItem('mizan_staff_' + AGENCY_KEY, JSON.stringify(currentUser));
             document.getElementById('loginPassInput').value = '';
             msg.textContent = '';
             syncScreenState();
         } catch {
-            msg.textContent = 'تعذر الاتصال بالسيرفر.';
+            msg.textContent = 'ØªØ¹Ø°Ø± Ø§Ù„Ø§ØªØµØ§Ù„ Ø¨Ø§Ù„Ø³ÙŠØ±ÙØ±.';
         }
     }
 
     function handleLogout() {
-        if (confirm('هل تريد بالتأكيد تسجيل الخروج وقفل الشاشة؟')) {
+        if (confirm('Ù‡Ù„ ØªØ±ÙŠØ¯ Ø¨Ø§Ù„ØªØ£ÙƒÙŠØ¯ ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø®Ø±ÙˆØ¬ ÙˆÙ‚ÙÙ„ Ø§Ù„Ø´Ø§Ø´Ø©ØŸ')) {
             currentUser = null;
             localStorage.removeItem('mizan_staff_' + AGENCY_KEY);
             syncScreenState();
@@ -1368,8 +1518,9 @@ th { background: #5A0817; color: white; }
     function switchTab(tabId, btn) {
         document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
         document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-        document.getElementById(tabId).classList.add('active');
-        btn.classList.add('active');
+        const target = document.getElementById(tabId);
+        if (target) target.classList.add('active');
+        if (btn) btn.classList.add('active');
     }
 
     function setDateRange(type) {
@@ -1416,14 +1567,14 @@ th { background: #5A0817; color: white; }
         const d = parseFloat(document.getElementById('posDisc').value) || 0;
         const base = w > 0 ? w : q;
         const tot = Math.max(0, (base * p) - d);
-        document.getElementById('posTotalTxt').textContent = Math.round(tot).toLocaleString() + ' ج';
+        document.getElementById('posTotalTxt').textContent = Math.round(tot).toLocaleString() + ' Ø¬';
     }
 
     function addItemToLoadCart() {
         const item = document.getElementById('loadItemSelect').value;
         const q = parseFloat(document.getElementById('loadItemQty').value) || 0;
         const w = parseFloat(document.getElementById('loadItemWt').value) || 0;
-        if (q <= 0 && w <= 0) { alert('أدخل كمية أو وزن صحيح'); return; }
+        if (q <= 0 && w <= 0) { alert('Ø£Ø¯Ø®Ù„ ÙƒÙ…ÙŠØ© Ø£Ùˆ ÙˆØ²Ù† ØµØ­ÙŠØ­'); return; }
         
         vehicleCargoItems.push({ Item: item, QtyIn: q, WeightIn: w });
         renderVehicleCargoTable();
@@ -1437,17 +1588,17 @@ th { background: #5A0817; color: white; }
     function renderVehicleCargoTable() {
         const tbody = document.getElementById('loadItemsTbody');
         if (vehicleCargoItems.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">لم يتم إضافة أصناف للسيارة بعد</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">Ù„Ù… ÙŠØªÙ… Ø¥Ø¶Ø§ÙØ© Ø£ØµÙ†Ø§Ù Ù„Ù„Ø³ÙŠØ§Ø±Ø© Ø¨Ø¹Ø¯</td></tr>';
             return;
         }
-        tbody.innerHTML = vehicleCargoItems.map((it, idx) => \`
+        tbody.innerHTML = vehicleCargoItems.map((it, idx) => `
             <tr>
-                <td><b>\${it.Item}</b></td>
-                <td>\${it.QtyIn} ق</td>
-                <td>\${it.WeightIn} ك</td>
-                <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;" onclick="removeLoadItem(\${idx})">✕</button></td>
+                <td><b>${esc(it.Item)}</b></td>
+                <td>${it.QtyIn} Ù‚</td>
+                <td>${it.WeightIn} Ùƒ</td>
+                <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;" onclick="removeLoadItem(${idx})">âœ•</button></td>
             </tr>
-        \`).join('');
+        `).join('');
     }
 
     async function submitFullVehicleLoad() {
@@ -1456,8 +1607,8 @@ th { background: #5A0817; color: white; }
         const fr = parseFloat(document.getElementById('loadFreightInput').value) || 0;
         const comm = parseFloat(document.getElementById('loadCommInput').value) || 5;
 
-        if (!veh) { alert('يرجى إدخال رقم أو بيان السيارة'); return; }
-        if (vehicleCargoItems.length === 0) { alert('يرجى إضافة صنف واحد على الأقل للسيارة'); return; }
+        if (!veh) { alert('ÙŠØ±Ø¬Ù‰ Ø¥Ø¯Ø®Ø§Ù„ Ø±Ù‚Ù… Ø£Ùˆ Ø¨ÙŠØ§Ù† Ø§Ù„Ø³ÙŠØ§Ø±Ø©'); return; }
+        if (vehicleCargoItems.length === 0) { alert('ÙŠØ±Ø¬Ù‰ Ø¥Ø¶Ø§ÙØ© ØµÙ†Ù ÙˆØ§Ø­Ø¯ Ø¹Ù„Ù‰ Ø§Ù„Ø£Ù‚Ù„ Ù„Ù„Ø³ÙŠØ§Ø±Ø©'); return; }
 
         const data = {
             Supplier: supp,
@@ -1500,8 +1651,8 @@ th { background: #5A0817; color: white; }
         printInvoiceReceipt({
             agencyName: "${esc(data.agency_name)}",
             invoiceNo: "SRV-TEST-001",
-            customer: "عميل تجريبي",
-            item: "طماطم فاخرة",
+            customer: "Ø¹Ù…ÙŠÙ„ ØªØ¬Ø±ÙŠØ¨ÙŠ",
+            item: "Ø·Ù…Ø§Ø·Ù… ÙØ§Ø®Ø±Ø©",
             qty: 50,
             weight: 125.0,
             price: 15.0,
@@ -1513,22 +1664,24 @@ th { background: #5A0817; color: white; }
 
     function printInvoiceReceipt(inv) {
         const area = document.getElementById('printArea');
-        area.innerHTML = \`
+        area.style.display = 'block';
+        area.innerHTML = `
             <div style="font-family:Tahoma,sans-serif;width:280px;margin:auto;text-align:right;font-size:12px;padding:10px;">
-                <h3 style="text-align:center;margin:0 0 5px 0;">\${inv.agencyName}</h3>
-                <div style="text-align:center;font-size:11px;border-bottom:1px dashed #000;padding-bottom:5px;">فاتورة مبيعات #\${inv.invoiceNo}</div>
-                <div style="margin:6px 0;">العميل: \${inv.customer}</div>
-                <div style="margin:6px 0;">الصنف: \${inv.item} (\${inv.qty}ق / \${inv.weight}ك @ \${inv.price}ج)</div>
-                <div style="font-weight:bold;font-size:14px;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:5px 0;">الإجمالي: \${inv.total.toLocaleString()} جنيه</div>
-                <div style="text-align:center;margin-top:10px;font-size:10px;">منظومة ميزان السحابية</div>
+                <h3 style="text-align:center;margin:0 0 5px 0;">${esc(inv.agencyName)}</h3>
+                <div style="text-align:center;font-size:11px;border-bottom:1px dashed #000;padding-bottom:5px;">ÙØ§ØªÙˆØ±Ø© Ù…Ø¨ÙŠØ¹Ø§Øª #${esc(inv.invoiceNo)}</div>
+                <div style="margin:6px 0;">Ø§Ù„Ø¹Ù…ÙŠÙ„: ${esc(inv.customer)}</div>
+                <div style="margin:6px 0;">Ø§Ù„ØµÙ†Ù: ${esc(inv.item)} (${inv.qty}Ù‚ / ${inv.weight}Ùƒ @ ${inv.price}Ø¬)</div>
+                <div style="font-weight:bold;font-size:14px;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:5px 0;">Ø§Ù„Ø¥Ø¬Ù…Ø§Ù„ÙŠ: ${inv.total.toLocaleString()} Ø¬Ù†ÙŠÙ‡</div>
+                <div style="text-align:center;margin-top:10px;font-size:10px;">Ù…Ù†Ø¸ÙˆÙ…Ø© Ù…ÙŠØ²Ø§Ù† Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠØ©</div>
             </div>
-        \`;
+        `;
         window.print();
+        setTimeout(() => { area.style.display = 'none'; }, 1000);
     }
 
     async function sendAction(action_type, data) {
         if (!currentUser || !currentUser.full_name) {
-            alert('انتهت الجلسة، يرجى تسجيل الدخول مجدداً.');
+            alert('Ø§Ù†ØªÙ‡Øª Ø§Ù„Ø¬Ù„Ø³Ø©ØŒ ÙŠØ±Ø¬Ù‰ ØªØ³Ø¬ÙŠÙ„ Ø§Ù„Ø¯Ø®ÙˆÙ„ Ù…Ø¬Ø¯Ø¯Ø§Ù‹.');
             handleLogout();
             return false;
         }
@@ -1549,11 +1702,11 @@ th { background: #5A0817; color: white; }
                 alert(j.message);
                 return true;
             } else {
-                alert('خطأ: ' + (j.message || 'فشلت العملية'));
+                alert('Ø®Ø·Ø£: ' + (j.message || 'ÙØ´Ù„Øª Ø§Ù„Ø¹Ù…Ù„ÙŠØ©'));
                 return false;
             }
         } catch (e) {
-            alert('تعذر الاتصال بالسيرفر السحابي: ' + e.message);
+            alert('ØªØ¹Ø°Ø± Ø§Ù„Ø§ØªØµØ§Ù„ Ø¨Ø§Ù„Ø³ÙŠØ±ÙØ± Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ: ' + e.message);
             return false;
         }
     }
@@ -1567,11 +1720,11 @@ th { background: #5A0817; color: white; }
         const d = parseFloat(f.Discount.value) || 0;
         const base = w > 0 ? w : q;
         const val = Math.max(0, (base * p) - d);
-        const isCash = f.PaymentMethod.value.includes('نقدي') || f.Customer.value === 'عميل نقدي';
+        const isCash = f.PaymentMethod.value.includes('Ù†Ù‚Ø¯ÙŠ') || f.Customer.value === 'Ø¹Ù…ÙŠÙ„ Ù†Ù‚Ø¯ÙŠ';
 
         const itemSelect = document.getElementById('posItemSelect');
         const selectedItemOpt = itemSelect.options[itemSelect.selectedIndex];
-        const supplierName = selectedItemOpt.getAttribute('data-supplier') || 'عام';
+        const supplierName = selectedItemOpt.getAttribute('data-supplier') || 'Ø¹Ø§Ù…';
 
         const data = {
             Customer: f.Customer.value,
@@ -1632,7 +1785,7 @@ th { background: #5A0817; color: white; }
             Category: f.Category.value,
             Description: f.Description.value,
             Amount: parseFloat(f.Amount.value) || 0,
-            PaymentMethod: 'نقدي (كاش)'
+            PaymentMethod: 'Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)'
         };
         const ok = await sendAction('EXPENSE', data);
         if (ok) f.reset();
@@ -1652,7 +1805,7 @@ th { background: #5A0817; color: white; }
             Value: val,
             PaidAmount: paid,
             RemainingAmount: Math.max(0, val - paid),
-            PaymentMethod: 'نقدي (كاش)'
+            PaymentMethod: 'Ù†Ù‚Ø¯ÙŠ (ÙƒØ§Ø´)'
         };
         const ok = await sendAction('PURCHASE', data);
         if (ok) f.reset();
@@ -1664,9 +1817,10 @@ th { background: #5A0817; color: white; }
         const data = {
             Customer: f.Customer.value,
             Qty: parseFloat(f.Qty.value) || 0,
-            Price: parseFloat(f.Price.value) || 70
+            Price: parseFloat(f.Price.value) || 70,
+            IsCashCollected: !!f.IsCashCollected?.checked
         };
-        const ok = await sendAction(f.Kind.value === 'استرجاع' ? 'CRATE_RETURN' : 'CRATE_DELIVERY', data);
+        const ok = await sendAction(f.Kind.value === 'Ø§Ø³ØªØ±Ø¬Ø§Ø¹' ? 'CRATE_RETURN' : 'CRATE_DELIVERY', data);
         if (ok) f.reset();
     }
 
@@ -1686,19 +1840,19 @@ th { background: #5A0817; color: white; }
     }
 
     async function deleteInvoiceAction(invNo) {
-        if (confirm('هل تريد حذف الفاتورة #' + invNo + ' من السيرفر والديسكتوب؟')) {
+        if (confirm('Ù‡Ù„ ØªØ±ÙŠØ¯ Ø­Ø°Ù Ø§Ù„ÙØ§ØªÙˆØ±Ø© #' + invNo + ' Ù…Ù† Ø§Ù„Ø³ÙŠØ±ÙØ± ÙˆØ§Ù„Ø¯ÙŠØ³ÙƒØªÙˆØ¨ØŸ')) {
             await sendAction('DELETE_INVOICE', { InvoiceNo: invNo });
         }
     }
 
     async function deleteColAction(recNo) {
-        if (confirm('هل تريد حذف سند التحصيل #' + recNo + '؟')) {
+        if (confirm('Ù‡Ù„ ØªØ±ÙŠØ¯ Ø­Ø°Ù Ø³Ù†Ø¯ Ø§Ù„ØªØ­ØµÙŠÙ„ #' + recNo + 'ØŸ')) {
             await sendAction('DELETE_COLLECTION', { ReceiptNo: recNo });
         }
     }
 
     async function deleteExpAction(expId) {
-        if (confirm('هل تريد حذف هذا المصروف؟')) {
+        if (confirm('Ù‡Ù„ ØªØ±ÙŠØ¯ Ø­Ø°Ù Ù‡Ø°Ø§ Ø§Ù„Ù…ØµØ±ÙˆÙØŸ')) {
             await sendAction('DELETE_EXPENSE', { Id: expId });
         }
     }
@@ -1714,6 +1868,6 @@ th { background: #5A0817; color: white; }
         return res.end("Not Found");
     } catch (err) {
         console.error(err);
-        return sendJson(res, 500, { success: false, message: 'خطأ في السيرفر السحابي.' });
+        return sendJson(res, 500, { success: false, message: 'Ø®Ø·Ø£ ÙÙŠ Ø§Ù„Ø³ÙŠØ±ÙØ± Ø§Ù„Ø³Ø­Ø§Ø¨ÙŠ.' });
     }
 };
