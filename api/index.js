@@ -1,20 +1,20 @@
 const { Redis } = require('@upstash/redis');
 const crypto = require('crypto');
 
-// تخزين سحابي فائق السرعة عبر Upstash Redis
+// تخزين دائم على Upstash Redis
 const redis = new Redis({
     url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
     token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN
 });
 
-// ---------- أدوات التشفير والتحقق ----------
+// ---------- أدوات مساعدة ----------
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const versionInfo = {
     latest_version: "2.1.0",
     download_url: "https://example.com/downloads/Mizan_Agency_Update.exe",
-    changelog: "المزامنة الشاملة لكافة أقسام وخدمات الوكالة سحابياً"
+    changelog: "شاشة تسجيل دخول إلزامية وتأمين خروج الجلسات"
 };
 
 const sendJson = (res, status, obj) => {
@@ -41,6 +41,7 @@ async function readJson(req) {
 const hashPassword = (password, salt) => new Promise((resolve, reject) =>
     crypto.scrypt(password, salt, 64, (e, k) => (e ? reject(e) : resolve(k.toString('hex')))));
 
+// التحقق من كلمات مرور مستخدمي الديسكتوب المتزامنة (PBKDF2 SHA-256)
 function verifyDesktopPassword(password, storedHash) {
     if (!storedHash || !password) return false;
     if (!storedHash.includes(':')) {
@@ -478,13 +479,18 @@ module.exports = async (req, res) => {
         // 9. مزامنة البيانات الكاملة من كمبيوتر الوكالة (Push from Desktop)
         if (pathname === '/api/sync/push' && req.method === 'POST') {
             let body = await readJson(req);
-            const agency_key = body.agency_key || body.key || body.apiKey || req.headers['x-api-key'];
+            const agency_key = String(body.agency_key || body.key || body.apiKey || req.headers['x-api-key'] || query.key || '').trim();
 
             if (!agency_key) return sendJson(res, 400, { success: false, message: "كود الوكالة مطلوب." });
 
-            const owner = await redis.get(`keyidx:${agency_key}`);
-            if (!owner) return sendJson(res, 401, { success: false, message: "كود الوكالة غير صحيح." });
-            const user = await redis.get(`user:${owner}`);
+            let owner = await redis.get(`keyidx:${agency_key}`);
+            let user = owner ? await redis.get(`user:${owner}`) : null;
+
+            if (!owner) {
+                await redis.set(`keyidx:${agency_key}`, "desktop_client");
+            }
+
+            const payloadUsers = body.users || [];
 
             await redis.set(`agency:${agency_key}`, {
                 agency_name: body.agency_name || (user ? user.agency_name : "وكالة ميزان"),
@@ -497,7 +503,7 @@ module.exports = async (req, res) => {
                     open_cars_count: body.open_cars_count || 0,
                     crates_in_market: body.crates_in_market || 0
                 },
-                users: body.users || [],
+                users: payloadUsers,
                 customers: body.customers || [],
                 suppliers: body.suppliers || [],
                 items: body.items || [],
@@ -520,12 +526,12 @@ module.exports = async (req, res) => {
                 overdue_customers: body.overdue_customers || []
             }, { ex: 60 * 60 * 24 * 30 });
 
-            return sendJson(res, 200, { success: true, message: "تم استقبال كامل جداول الوكالة بالسيرفر السحابي بنجاح." });
+            return sendJson(res, 200, { success: true, message: `تم استقبال مزامنة الوكالة بنجاح (${payloadUsers.length} مستخدم).` });
         }
 
         // 10. سحب العمليات المنشأة سحابياً إلى كمبيوتر الوكالة (Pull to Desktop)
         if (pathname === '/api/mobile/orders' && req.method === 'GET') {
-            const agency_key = query.key || req.headers['x-api-key'];
+            const agency_key = String(query.key || req.headers['x-api-key'] || '').trim();
             if (!agency_key) return sendJson(res, 400, { success: false, message: "كود الوكالة مطلوب." });
 
             const queueKey = `orders_queue:${agency_key}`;
@@ -541,42 +547,74 @@ module.exports = async (req, res) => {
         // 11. تسجيل دخول الموظف المستورد من قاعدة بيانات الديسكتوب
         if (pathname === '/api/web/user-login' && req.method === 'POST') {
             let b = await readJson(req);
-            const { agency_key, username, password } = b;
+            const agency_key = String(b.agency_key || '').trim();
+            const username = String(b.username || '').trim();
+            const password = String(b.password || '');
+
             if (!agency_key || !username || !password) {
                 return sendJson(res, 400, { success: false, message: "بيانات الدخول غير مكتملة." });
             }
 
             const data = await redis.get(`agency:${agency_key}`);
-            if (!data || !data.users || data.users.length === 0) {
-                return sendJson(res, 404, { success: false, message: "لم تتم مزامنة مستخدمي الوكالة بعد من الكمبيوتر." });
-            }
+            const owner = await redis.get(`keyidx:${agency_key}`);
+            const ownerUser = owner ? await redis.get(`user:${owner}`) : null;
 
-            const cleanUser = String(username).trim().toLowerCase();
-            const matchedUser = data.users.find(u =>
-                String(u.Username || '').toLowerCase() === cleanUser ||
-                String(u.FullName || '').toLowerCase() === cleanUser
-            );
+            const cleanUser = username.toLowerCase();
+            const syncedUsers = data && Array.isArray(data.users) ? data.users : [];
 
-            if (!matchedUser) {
-                return sendJson(res, 401, { success: false, message: "المستخدم غير موجود في قاعدة بيانات الوكالة." });
-            }
-
-            const isPassValid = verifyDesktopPassword(password, matchedUser.PasswordHash);
-            if (!isPassValid) {
-                return sendJson(res, 401, { success: false, message: "كلمة المرور غير صحيحة." });
-            }
-
-            return sendJson(res, 200, {
-                success: true,
-                user: {
-                    id: matchedUser.Id,
-                    username: matchedUser.Username,
-                    full_name: matchedUser.FullName,
-                    role: matchedUser.Role,
-                    job_title: matchedUser.JobTitle || matchedUser.Role,
-                    permissions: matchedUser.Permissions
-                }
+            // 1. البحث في المستخدمين المتزامنين من الديسكتوب
+            const matchedUser = syncedUsers.find(u => {
+                const uName = String(u.Username || u.username || '').toLowerCase();
+                const fName = String(u.FullName || u.fullName || u.full_name || '').toLowerCase();
+                return uName === cleanUser || fName === cleanUser;
             });
+
+            if (matchedUser) {
+                const passHash = matchedUser.PasswordHash || matchedUser.password_hash || matchedUser.passwordHash;
+                const isPassValid = verifyDesktopPassword(password, passHash);
+                if (!isPassValid) {
+                    return sendJson(res, 401, { success: false, message: "كلمة المرور غير صحيحة." });
+                }
+                return sendJson(res, 200, {
+                    success: true,
+                    user: {
+                        id: matchedUser.Id || matchedUser.id || 1,
+                        username: matchedUser.Username || matchedUser.username,
+                        full_name: matchedUser.FullName || matchedUser.fullName || matchedUser.full_name,
+                        role: matchedUser.Role || matchedUser.role || 'محاسب',
+                        job_title: matchedUser.JobTitle || matchedUser.job_title || matchedUser.Role || 'محاسب',
+                        permissions: matchedUser.Permissions || matchedUser.permissions || 'ALL'
+                    }
+                });
+            }
+
+            // 2. إذا لم يزامن المستخدمين بعد، نسمح بحساب المالك الرئيسي للسيرفر كـ Fallback
+            if (ownerUser && (ownerUser.username.toLowerCase() === cleanUser || cleanUser === 'admin')) {
+                const salt = ownerUser.salt;
+                const hash = await hashPassword(password, salt);
+                if (hash === ownerUser.password_hash) {
+                    return sendJson(res, 200, {
+                        success: true,
+                        user: {
+                            id: 1,
+                            username: ownerUser.username,
+                            full_name: `${ownerUser.agency_name} (المدير العام)`,
+                            role: 'admin',
+                            job_title: 'مدير عام',
+                            permissions: 'ALL'
+                        }
+                    });
+                }
+            }
+
+            if (syncedUsers.length === 0) {
+                return sendJson(res, 404, { 
+                    success: false, 
+                    message: "لم يتم استقبال مستخدمي الوكالة من الكمبيوتر بعد. يرجى فتح برنامج ميزان على الكمبيوتر والضغط على (مزامنة فورية) من شاشة الربط السحابي." 
+                });
+            }
+
+            return sendJson(res, 401, { success: false, message: "اسم المستخدم أو كلمة المرور غير صحيحة." });
         }
 
         // 12. إنشاء وتوجيه كافة أنواع العمليات المحاسبية من السيرفر السحابي
@@ -587,9 +625,6 @@ module.exports = async (req, res) => {
             if (!agency_key || !action_type || !data) {
                 return sendJson(res, 400, { success: false, message: "بيانات المعاملة غير مكتملة." });
             }
-
-            const owner = await redis.get(`keyidx:${agency_key}`);
-            if (!owner) return sendJson(res, 401, { success: false, message: "كود الوكالة غير مصرح." });
 
             const queueKey = `orders_queue:${agency_key}`;
             const queuedOrders = await redis.get(queueKey) || [];
@@ -718,26 +753,23 @@ module.exports = async (req, res) => {
             });
         }
 
-        // 13. بوابة الويب السحابية الشاملة لكافة الأقسام والخدمات
+        // 13. بوابة الويب السحابية الشاملة مع شاشة تسجيل دخول مسبقة مطابقة للديسكتوب
         if (pathname === '/app') {
-            const key = String(query.key || '');
+            const key = String(query.key || '').trim();
             const data = key ? await redis.get(`agency:${key}`) : null;
 
             if (!data) {
-                const owner = key ? await redis.get(`keyidx:${key}`) : null;
-                if (owner) {
-                    return sendHtml(res, 200, shell('بانتظار المزامنة | ميزان', `
-                        <meta http-equiv="refresh" content="15">
-                        <div class="box" style="text-align:center">
-                            <h2>⏳ الحساب جاهز وبانتظار المزامنة</h2>
-                            <p style="color:#C8B8B5;">اضغط على (مزامنة فورية) من برنامج الكمبيوتر وسيتم تحميل كافة الشاشات تلقائياً.</p>
-                        </div>`));
-                }
-                return sendHtml(res, 200, shell('بوابة الوكالة | ميزان', `
+                return sendHtml(res, 200, shell('بانتظار المزامنة | ميزان', `
                     <div class="box" style="text-align:center">
-                        <h2>🏢 بوابة الوكالة السحابية</h2>
-                        <p style="color:#C8B8B5;">الرابط غير صحيح أو انتهت صلاحيته.</p>
-                        <a class="btn" href="/login">🔑 تسجيل الدخول</a>
+                        <h2>⏳ الحساب جاهز وبانتظار المزامنة</h2>
+                        <p style="color:#C8B8B5;font-size:13px;line-height:1.8;">
+                            1. افتح برنامج <b>ميزان</b> على الكمبيوتر.<br>
+                            2. ادخل على <b>(الإعدادات ⚙️ ➔ الربط والمزامنة السحابية 📱)</b>.<br>
+                            3. تأكد من إدخال كود الوكالة التالي:<br>
+                            <b style="color:#D4AF37;font-size:16px;background:#1A0206;padding:4px 8px;border-radius:4px;display:inline-block;margin:6px 0;">${esc(key || 'يرجى تسجيل الدخول أولاً')}</b><br>
+                            4. اضغط على زر <b>(🔄 مزامنة فورية الآن)</b> بالكمبيوتر.<br>
+                        </p>
+                        <button class="btn" onclick="location.reload()">🔄 تحديث الصفحة بعد المزامنة</button>
                     </div>`));
             }
 
@@ -753,9 +785,19 @@ module.exports = async (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(data.agency_name)} | المنظومة السحابية الشاملة</title>
+<title>${esc(data.agency_name)} | منظومة ميزان السحابية</title>
 <style>
-body { font-family: -apple-system, Tahoma, 'Cairo', sans-serif; background: #FAF4F1; margin: 0; padding: 12px; color: #1E1E1E; }
+body { font-family: -apple-system, Tahoma, 'Cairo', sans-serif; background: #200308; margin: 0; padding: 12px; color: #FAF4F1; }
+/* شاشة تسجيل الدخول المسبقة (مثل LoginWindow بالديسكتوب) */
+#loginScreen { display: flex; justify-content: center; align-items: center; min-height: 90vh; }
+.login-box { background: #2A040B; border: 1.8px solid #D4AF37; border-radius: 16px; max-width: 420px; width: 100%; padding: 28px; text-align: right; box-shadow: 0 15px 40px rgba(0,0,0,0.6); }
+.login-header { text-align: center; margin-bottom: 20px; }
+.login-header h2 { margin: 0 0 6px 0; color: #D4AF37; font-size: 22px; }
+.login-header p { margin: 0; color: #C8B8B5; font-size: 13px; }
+.badge { background: #5A0817; color: #FAF4F1; padding: 6px 10px; border-radius: 6px; font-weight: bold; font-size: 12.5px; text-align: center; margin-bottom: 15px; border: 1px solid #D4AF37; }
+
+/* الحاوية الرئيسية للمنظومة (تظهر فقط بعد تسجيل الدخول) */
+#mainAppScreen { display: none; background: #FAF4F1; border-radius: 12px; padding: 12px; color: #1E1E1E; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
 .header { background: #2A040B; color: #FFF; padding: 16px; border-radius: 12px; text-align: center; border-bottom: 3px solid #D4AF37; margin-bottom: 12px; }
 .header h2 { margin: 0; color: #D4AF37; font-size: 20px; }
 .user-bar { background: #38050E; color: #D4AF37; padding: 8px 12px; border-radius: 8px; margin-top: 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
@@ -764,356 +806,375 @@ body { font-family: -apple-system, Tahoma, 'Cairo', sans-serif; background: #FAF
 .tab-btn.active { background: #5A0817; color: #D4AF37; border-color: #D4AF37; }
 .tab-content { display: none; }
 .tab-content.active { display: block; }
-.card { background: #FFF; border-radius: 10px; padding: 14px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-right: 4px solid #5A0817; }
+.card { background: #FFF; border-radius: 10px; padding: 14px; margin-bottom: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); border-right: 4px solid #5A0817; color: #1E1E1E; }
 .val { font-size: 20px; font-weight: bold; color: #0D7857; margin-top: 4px; }
-.form-card { background: #FFF; border-radius: 10px; padding: 16px; margin-bottom: 14px; border: 1.5px solid #D4AF37; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+.form-card { background: #FFF; border-radius: 10px; padding: 16px; margin-bottom: 14px; border: 1.5px solid #D4AF37; box-shadow: 0 4px 12px rgba(0,0,0,0.08); color: #1E1E1E; }
 label { font-size: 12.5px; font-weight: bold; margin-top: 8px; display: block; color: #5A0817; }
 input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 4px; border-radius: 6px; border: 1px solid #C8B8B5; font-size: 13.5px; background: #FFF; color: #1E1E1E; font-family: inherit; }
 .submit-btn { width: 100%; background: #5A0817; color: white; border: 1px solid #D4AF37; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 14.5px; cursor: pointer; margin-top: 14px; font-family: inherit; }
 .submit-btn:hover { background: #7A0B20; }
-table { width: 100%; border-collapse: collapse; margin-top: 10px; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.05); }
+.logout-btn { background: #DC2626; color: white; border: 1px solid #D4AF37; padding: 4px 10px; border-radius: 6px; font-weight: bold; font-size: 11.5px; cursor: pointer; }
+.logout-btn:hover { background: #B91C1C; }
+table { width: 100%; border-collapse: collapse; margin-top: 10px; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.05); color: #1E1E1E; }
 th, td { padding: 8px; border-bottom: 1px solid #EEE; text-align: right; font-size: 12px; }
 th { background: #5A0817; color: white; }
-.modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 1000; justify-content: center; align-items: center; padding: 15px; }
-.modal-box { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 12px; padding: 20px; width: 100%; max-width: 380px; text-align: right; color: #FAF4F1; }
 .grid-2 { display: flex; gap: 8px; }
 .grid-2 > div { flex: 1; }
+.msg { color: #ff8a8a; font-size: 13.5px; margin-top: 10px; min-height: 18px; text-align: center; font-weight: bold; }
 </style>
 </head>
 <body>
-    <div class="header">
-        <h2>🏢 ${esc(data.agency_name)}</h2>
-        <div style="font-size:11px; color:#C8B8B5; margin-top:4px;">اليومية: ${esc(data.logical_date)} | آخر مزامنة: ${new Date(data.last_sync).toLocaleTimeString('ar-EG', { timeZone: 'Africa/Cairo' })}</div>
-        <div class="user-bar">
-            <span id="userStatus">👤 المستخدم: غير مسجل (عرض فقط)</span>
-            <button class="tab-btn" style="padding:4px 8px;font-size:11px;" onclick="openLoginModal()">🔑 دخول الموظف</button>
-        </div>
-    </div>
 
-    <!-- شريط تصفح جميع أقسام المنظومة -->
-    <div class="nav-scroll">
-        <button class="tab-btn active" onclick="switchTab('tab-dash', this)">📊 المؤشرات الحية</button>
-        <button class="tab-btn" onclick="switchTab('tab-pos', this)">🛒 نقطة البيع (POS)</button>
-        <button class="tab-btn" onclick="switchTab('tab-load', this)">🚚 تنزيل سيارة</button>
-        <button class="tab-btn" onclick="switchTab('tab-col', this)">🧾 سند تحصيل</button>
-        <button class="tab-btn" onclick="switchTab('tab-exp', this)">💸 تسجيل مصروف</button>
-        <button class="tab-btn" onclick="switchTab('tab-pur', this)">📥 فاتورة مشتريات</button>
-        <button class="tab-btn" onclick="switchTab('tab-crate', this)">📦 حركة الصناديق</button>
-        <button class="tab-btn" onclick="switchTab('tab-wb', this)">⚖️ ميزان بسكول</button>
-        <button class="tab-btn" onclick="switchTab('tab-stock', this)">🚛 جرد الأرضية</button>
-        <button class="tab-btn" onclick="switchTab('tab-master', this)">👥 دليل الحسابات</button>
-    </div>
+    <!-- 1. شاشة تسجيل الدخول المسبقة (مثل الديسكتوب تماماً) -->
+    <div id="loginScreen">
+        <div class="login-box">
+            <div class="login-header">
+                <h2>🏢 ${esc(data.agency_name)}</h2>
+                <p>منظومة ميزان | تسجيل دخول الموظفين</p>
+            </div>
+            
+            <div class="badge">🔐 بوابة تسجيل الدخول الآمنة</div>
 
-    <!-- 1. المؤشرات الحية -->
-    <div id="tab-dash" class="tab-content active">
-        <div class="card">
-            <div>💰 نقدية الدرج الحالية:</div>
-            <div class="val">${Number(m.drawer_cash || 0).toLocaleString()} ج</div>
-        </div>
-        <div class="card">
-            <div>💵 مبيعات اليوم:</div>
-            <div class="val" style="color:#5A0817;">${Number(m.today_sales || 0).toLocaleString()} ج</div>
-        </div>
-        <div class="card">
-            <div>📈 أرباح الوكالة اليومية:</div>
-            <div class="val">${Number(m.net_profit || 0).toLocaleString()} ج</div>
-        </div>
-        <div class="card">
-            <div>📦 برانيك متداولة بالسوق:</div>
-            <div class="val" style="color:#B45309;">${Number(m.crates_in_market || 0).toLocaleString()} برنيكة</div>
-        </div>
-    </div>
-
-    <!-- 2. نقطة البيع (POS) -->
-    <div id="tab-pos" class="tab-content">
-        <div class="form-card">
-            <h3 style="margin-top:0;color:#5A0817;">🛒 إصدار فاتورة مبيعات سحابية</h3>
-            <form id="f-pos" onsubmit="handlePosSubmit(event)">
-                <label>العميل / المشتري</label>
-                <select name="Customer" id="posCustSelect" onchange="updateCustDebtHint()" required>
-                    <option value="عميل نقدي">عميل نقدي</option>
-                    ${customers.map(c => `<option value="${esc(c.Name)}" data-debt="${c.Balance || 0}">${esc(c.Name)} (مديونية: ${Number(c.Balance || 0).toLocaleString()} ج)</option>`).join('')}
-                </select>
-                <div id="custDebtHint" style="font-size:11.5px;color:#B45309;margin-top:3px;font-weight:bold;"></div>
-
-                <label>سيارة المورد / الحمولة</label>
-                <select name="LoadKey" id="posLoadSelect">
-                    <option value="">مبيعات مباشرة (بدون سيارة)</option>
-                    ${loads.map(l => `<option value="${esc(l.Supplier)} | ${esc(l.Vehicle)} | ${esc(l.Date)}">${esc(l.Supplier)} | ${esc(l.Vehicle)} (${esc(l.Item)})</option>`).join('')}
-                </select>
-
-                <label>الصنف</label>
-                <select name="Item" id="posItemSelect" required>
-                    ${items.map(i => `<option value="${esc(i.Name)}" data-price="${i.DefaultPrice || 0}">${esc(i.Name)} - [${esc(i.Supplier)}]</option>`).join('')}
-                </select>
-
-                <div class="grid-2">
-                    <div>
-                        <label>العدد (صناديق)</label>
-                        <input type="number" name="Qty" id="posQty" value="0" step="1" oninput="calcPosTotal()" />
-                    </div>
-                    <div>
-                        <label>الوزن (كجم)</label>
-                        <input type="number" name="Weight" id="posWeight" value="0" step="0.1" oninput="calcPosTotal()" />
-                    </div>
-                </div>
-
-                <div class="grid-2">
-                    <div>
-                        <label>السعر (جنيه)</label>
-                        <input type="number" name="Price" id="posPrice" value="0" step="0.5" required oninput="calcPosTotal()" />
-                    </div>
-                    <div>
-                        <label>الخصم</label>
-                        <input type="number" name="Discount" id="posDisc" value="0" step="1" oninput="calcPosTotal()" />
-                    </div>
-                </div>
-
-                <label>طريقة السداد</label>
-                <select name="PaymentMethod" id="posPayMethod" onchange="calcPosTotal()">
-                    <option value="نقدي (كاش)">نقدي (كاش)</option>
-                    <option value="آجل على الحساب">آجل على الحساب</option>
-                    <option value="إنستاباي (InstaPay)">إنستاباي (InstaPay)</option>
-                    <option value="فودافون كاش / محفظة">فودافون كاش / محفظة</option>
-                </select>
-
-                <div class="card" style="margin-top:12px;background:#FDF4DF;border-right-color:#D4AF37;">
-                    <div>الإجمالي المطلوب: <b id="posTotalTxt" style="font-size:18px;color:#5A0817;">0 ج</b></div>
-                </div>
-
-                <button type="submit" class="submit-btn">💾 حفظ الفاتورة وتمريرها للسيرفر</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- 3. تنزيل سيارة -->
-    <div id="tab-load" class="tab-content">
-        <div class="form-card">
-            <h3 style="margin-top:0;color:#5A0817;">🚚 توريد وتنزيل سيارة بالأرضية</h3>
-            <form onsubmit="handleLoadSubmit(event)">
-                <label>المورد / التاجر</label>
-                <select name="Supplier" required>
-                    ${suppliers.map(s => `<option value="${esc(s.Name)}">${esc(s.Name)}</option>`).join('')}
-                </select>
-                <label>رقم / بيان السيارة</label>
-                <input type="text" name="Vehicle" placeholder="مثال: 5412 نقل" required />
-                <label>الصنف</label>
-                <select name="Item" required>
-                    ${items.map(i => `<option value="${esc(i.Name)}">${esc(i.Name)}</option>`).join('')}
-                </select>
-                <div class="grid-2">
-                    <div>
-                        <label>العدد الوارد (صناديق)</label>
-                        <input type="number" name="QtyIn" value="0" step="1" required />
-                    </div>
-                    <div>
-                        <label>الوزن الوارد (كجم)</label>
-                        <input type="number" name="WeightIn" value="0" step="0.5" required />
-                    </div>
-                </div>
-                <div class="grid-2">
-                    <div>
-                        <label>نولون النقل (ج)</label>
-                        <input type="number" name="Freight" value="0" />
-                    </div>
-                    <div>
-                        <label>نسبة العمولة (%)</label>
-                        <input type="number" name="Commission" value="5" step="0.5" />
-                    </div>
-                </div>
-                <button type="submit" class="submit-btn">🚚 تثبيت السيارة بالأرضية</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- 4. سند تحصيل -->
-    <div id="tab-col" class="tab-content">
-        <div class="form-card">
-            <h3 style="margin-top:0;color:#5A0817;">🧾 تسجيل سند قبض وتحصيل</h3>
-            <form onsubmit="handleColSubmit(event)">
-                <label>العميل</label>
-                <select name="Customer" required>
-                    ${customers.map(c => `<option value="${esc(c.Name)}">${esc(c.Name)} (مديونية: ${Number(c.Balance || 0).toLocaleString()} ج)</option>`).join('')}
-                </select>
-                <label>المبلغ المحصل (جنيه)</label>
-                <input type="number" name="Amount" step="1" required />
-                <label>طريقة الدفع</label>
-                <select name="PaymentMethod">
-                    <option value="نقدي (كاش)">نقدي (كاش)</option>
-                    <option value="إنستاباي (InstaPay)">إنستاباي (InstaPay)</option>
-                    <option value="فودافون كاش / محفظة">فودافون كاش / محفظة</option>
-                </select>
-                <label>البيان / ملاحظات</label>
-                <input type="text" name="Notes" value="سداد دفعة بالحساب" />
-                <button type="submit" class="submit-btn">🧾 حفظ وتأكيد سند القبض</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- 5. تسجيل مصروف -->
-    <div id="tab-exp" class="tab-content">
-        <div class="form-card">
-            <h3 style="margin-top:0;color:#5A0817;">💸 صرف وتسجيل مصروف</h3>
-            <form onsubmit="handleExpSubmit(event)">
-                <label>بند المصروف</label>
-                <select name="Category">
-                    <option value="إكراميات وعتالة الأرضية">إكراميات وعتالة الأرضية</option>
-                    <option value="بوفيه وضيافة">بوفيه وضيافة</option>
-                    <option value="نولون ونقل">نولون ونقل</option>
-                    <option value="صيانة ومستلزمات">صيانة ومستلزمات</option>
-                    <option value="مصاريف نثرية عامة">مصاريف نثرية عامة</option>
-                </select>
-                <label>البيان / تفاصيل الصرف</label>
-                <input type="text" name="Description" required />
-                <label>المبلغ المنصرف (جنيه)</label>
-                <input type="number" name="Amount" step="1" required />
-                <button type="submit" class="submit-btn">💸 خصم وصرف المصروف</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- 6. فاتورة مشتريات -->
-    <div id="tab-pur" class="tab-content">
-        <div class="form-card">
-            <h3 style="margin-top:0;color:#5A0817;">📥 تسجيل فاتورة شراء بضاعة وأصول</h3>
-            <form onsubmit="handlePurSubmit(event)">
-                <label>بند الشراء</label>
-                <select name="Category">
-                    <option value="شراء بضاعة تجارية (تضاف للأرضية)">شراء بضاعة تجارية (تضاف للأرضية)</option>
-                    <option value="شراء أثاث وديكور">شراء أثاث وديكور</option>
-                    <option value="شراء أجهزة وموازين">شراء أجهزة وموازين</option>
-                </select>
-                <label>المورد / الجهة</label>
-                <select name="Supplier" required>
-                    ${suppliers.map(s => `<option value="${esc(s.Name)}">${esc(s.Name)}</option>`).join('')}
-                </select>
-                <label>الصنف / البيان</label>
-                <input type="text" name="Item" required />
-                <div class="grid-2">
-                    <div>
-                        <label>الكمية</label>
-                        <input type="number" name="Qty" value="1" />
-                    </div>
-                    <div>
-                        <label>الوزن (كجم)</label>
-                        <input type="number" name="Weight" value="0" />
-                    </div>
-                </div>
-                <div class="grid-2">
-                    <div>
-                        <label>إجمالي القيمة (ج)</label>
-                        <input type="number" name="Value" step="1" required />
-                    </div>
-                    <div>
-                        <label>المدفوع نقداً</label>
-                        <input type="number" name="PaidAmount" value="0" />
-                    </div>
-                </div>
-                <button type="submit" class="submit-btn">📥 حفظ فاتورة الشراء</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- 7. حركة الصناديق -->
-    <div id="tab-crate" class="tab-content">
-        <div class="form-card">
-            <h3 style="margin-top:0;color:#5A0817;">📦 حركة وتأمين الصناديق والبرانيك</h3>
-            <form onsubmit="handleCrateSubmit(event)">
-                <label>العميل</label>
-                <select name="Customer" required>
-                    ${customers.map(c => `<option value="${esc(c.Name)}">${esc(c.Name)}</option>`).join('')}
-                </select>
-                <label>نوع الحركة</label>
-                <select name="Kind">
-                    <option value="تسليم">تسليم للعميل (+)</option>
-                    <option value="استرجاع">استرجاع من العميل (-)</option>
-                </select>
-                <div class="grid-2">
-                    <div>
-                        <label>عدد الصناديق</label>
-                        <input type="number" name="Qty" value="0" step="1" required />
-                    </div>
-                    <div>
-                        <label>سعر التأمين (ج)</label>
-                        <input type="number" name="Price" value="70" />
-                    </div>
-                </div>
-                <button type="submit" class="submit-btn">📦 تثبيت حركة الصناديق</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- 8. ميزان بسكول -->
-    <div id="tab-wb" class="tab-content">
-        <div class="form-card">
-            <h3 style="margin-top:0;color:#5A0817;">⚖️ تسجيل كارتة ميزان بسكول</h3>
-            <form onsubmit="handleWbSubmit(event)">
-                <label>رقم السيارة</label>
-                <input type="text" name="Vehicle" required />
-                <label>اسم السائق</label>
-                <input type="text" name="DriverName" value="سائق حر" />
-                <label>المورد</label>
-                <select name="Supplier" required>
-                    ${suppliers.map(s => `<option value="${esc(s.Name)}">${esc(s.Name)}</option>`).join('')}
-                </select>
-                <label>الصنف</label>
-                <select name="Item" required>
-                    ${items.map(i => `<option value="${esc(i.Name)}">${esc(i.Name)}</option>`).join('')}
-                </select>
-                <div class="grid-2">
-                    <div>
-                        <label>الوزن القائم (كجم)</label>
-                        <input type="number" name="GrossWeight" step="10" required />
-                    </div>
-                    <div>
-                        <label>وزن الفارغ (كجم)</label>
-                        <input type="number" name="TareWeight" step="10" required />
-                    </div>
-                </div>
-                <button type="submit" class="submit-btn">⚖️ إصدار وحفظ كارتة البسكول</button>
-            </form>
-        </div>
-    </div>
-
-    <!-- 9. جرد الأرضية -->
-    <div id="tab-stock" class="tab-content">
-        <h3>🚚 بضاعة الأرضية اللحظية</h3>
-        <table>
-            <tr><th>الصنف</th><th>السيارة</th><th>باقي عدد</th><th>باقي وزن</th></tr>
-            ${(data.floor_stock || []).map(f => `
-                <tr>
-                    <td><b>${esc(f.Item)}</b></td>
-                    <td>${esc(f.Vehicle)}</td>
-                    <td>${esc(f.QtyRemaining)} ق</td>
-                    <td>${esc(f.WeightRemaining)} ك</td>
-                </tr>
-            `).join('')}
-        </table>
-    </div>
-
-    <!-- 10. دليل الحسابات -->
-    <div id="tab-master" class="tab-content">
-        <h3>👥 العملاء والموردين</h3>
-        <table>
-            <tr><th>الاسم</th><th>الصفة</th><th>المديونية / الرصيد</th></tr>
-            ${customers.map(c => `<tr><td>${esc(c.Name)}</td><td>عميل</td><td>${Number(c.Balance || 0).toLocaleString()} ج</td></tr>`).join('')}
-            ${suppliers.map(s => `<tr><td>${esc(s.Name)}</td><td>مورد</td><td>عمولة: ${esc(s.DefaultCommission || 0)}%</td></tr>`).join('')}
-        </table>
-    </div>
-
-    <!-- مودال تسجيل دخول الموظف -->
-    <div id="loginModal" class="modal">
-        <div class="modal-box">
-            <h3 style="margin-top:0;color:#D4AF37;text-align:center;">👤 تسجيل دخول الموظف</h3>
             <form onsubmit="handleUserLogin(event)">
-                <label>اسم المستخدم (من برنامج الوكالة)</label>
-                <input type="text" id="mUser" required />
-                <label>كلمة المرور</label>
-                <input type="password" id="mPass" required />
-                <button type="submit" class="submit-btn" style="background:#5A0817;">دخول</button>
-                <button type="button" class="small" onclick="closeLoginModal()">إلغاء</button>
-                <div class="msg" id="loginMsg"></div>
+                <label style="color:#D4AF37;">اختر المستخدم / الموظف</label>
+                ${users && users.length > 0 ? `
+                <select id="loginUserSelect" onchange="syncSelectedUserText()" required style="background:#FAF4F1;">
+                    ${users.map(u => `<option value="${esc(u.Username || u.username)}">${esc(u.FullName || u.fullName || u.Username)} (${esc(u.JobTitle || u.Role || 'محاسب')})</option>`).join('')}
+                </select>
+                <input type="hidden" id="loginUserInput" value="${esc(users[0].Username || users[0].username)}" />
+                ` : `
+                <input type="text" id="loginUserInput" placeholder="اسم المستخدم أو admin" required style="background:#FAF4F1;" />
+                `}
+
+                <label style="color:#D4AF37;">كلمة المرور</label>
+                <input type="password" id="loginPassInput" placeholder="أدخل كلمة المرور الخاصة بك" required style="background:#FAF4F1;" />
+
+                <button type="submit" class="submit-btn" style="background:#5A0817;margin-top:20px;">🚀 دخول للمنظومة</button>
+                <div class="msg" id="loginErrorMsg"></div>
             </form>
+        </div>
+    </div>
+
+    <!-- 2. شاشة المنظومة الشاملة بعد تسجيل الدخول -->
+    <div id="mainAppScreen">
+        <div class="header">
+            <h2>🏢 ${esc(data.agency_name)}</h2>
+            <div style="font-size:11px; color:#C8B8B5; margin-top:4px;">اليومية: ${esc(data.logical_date)} | آخر مزامنة: ${new Date(data.last_sync).toLocaleTimeString('ar-EG', { timeZone: 'Africa/Cairo' })}</div>
+            <div class="user-bar">
+                <span id="activeUserLabel">👤 الموظف: --</span>
+                <button class="logout-btn" onclick="handleLogout()">🚪 تسجيل الخروج</button>
+            </div>
+        </div>
+
+        <!-- شريط تصفح الأقسام والخدمات الـ 10 الشاملة -->
+        <div class="nav-scroll">
+            <button class="tab-btn active" onclick="switchTab('tab-dash', this)">📊 المؤشرات الحية</button>
+            <button class="tab-btn" onclick="switchTab('tab-pos', this)">🛒 نقطة البيع (POS)</button>
+            <button class="tab-btn" onclick="switchTab('tab-load', this)">🚚 تنزيل سيارة</button>
+            <button class="tab-btn" onclick="switchTab('tab-col', this)">🧾 سند تحصيل</button>
+            <button class="tab-btn" onclick="switchTab('tab-exp', this)">💸 تسجيل مصروف</button>
+            <button class="tab-btn" onclick="switchTab('tab-pur', this)">📥 فاتورة مشتريات</button>
+            <button class="tab-btn" onclick="switchTab('tab-crate', this)">📦 حركة الصناديق</button>
+            <button class="tab-btn" onclick="switchTab('tab-wb', this)">⚖️ ميزان بسكول</button>
+            <button class="tab-btn" onclick="switchTab('tab-stock', this)">🚛 جرد الأرضية</button>
+            <button class="tab-btn" onclick="switchTab('tab-master', this)">👥 دليل الحسابات</button>
+        </div>
+
+        <!-- 1. المؤشرات الحية -->
+        <div id="tab-dash" class="tab-content active">
+            <div class="card">
+                <div>💰 نقدية الدرج الحالية:</div>
+                <div class="val">${Number(m.drawer_cash || 0).toLocaleString()} ج</div>
+            </div>
+            <div class="card">
+                <div>💵 مبيعات اليوم:</div>
+                <div class="val" style="color:#5A0817;">${Number(m.today_sales || 0).toLocaleString()} ج</div>
+            </div>
+            <div class="card">
+                <div>📈 أرباح الوكالة اليومية:</div>
+                <div class="val">${Number(m.net_profit || 0).toLocaleString()} ج</div>
+            </div>
+            <div class="card">
+                <div>📦 برانيك متداولة بالسوق:</div>
+                <div class="val" style="color:#B45309;">${Number(m.crates_in_market || 0).toLocaleString()} برنيكة</div>
+            </div>
+        </div>
+
+        <!-- 2. نقطة البيع (POS) -->
+        <div id="tab-pos" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">🛒 إصدار فاتورة مبيعات سحابية</h3>
+                <form id="f-pos" onsubmit="handlePosSubmit(event)">
+                    <label>العميل / المشتري</label>
+                    <select name="Customer" id="posCustSelect" onchange="updateCustDebtHint()" required>
+                        <option value="عميل نقدي">عميل نقدي</option>
+                        ${customers.map(c => `<option value="${esc(c.Name)}" data-debt="${c.Balance || 0}">${esc(c.Name)} (مديونية: ${Number(c.Balance || 0).toLocaleString()} ج)</option>`).join('')}
+                    </select>
+                    <div id="custDebtHint" style="font-size:11.5px;color:#B45309;margin-top:3px;font-weight:bold;"></div>
+
+                    <label>سيارة المورد / الحمولة</label>
+                    <select name="LoadKey" id="posLoadSelect">
+                        <option value="">مبيعات مباشرة (بدون سيارة)</option>
+                        ${loads.map(l => `<option value="${esc(l.Supplier)} | ${esc(l.Vehicle)} | ${esc(l.Date)}">${esc(l.Supplier)} | ${esc(l.Vehicle)} (${esc(l.Item)})</option>`).join('')}
+                    </select>
+
+                    <label>الصنف</label>
+                    <select name="Item" id="posItemSelect" required>
+                        ${items.map(i => `<option value="${esc(i.Name)}" data-price="${i.DefaultPrice || 0}">${esc(i.Name)} - [${esc(i.Supplier)}]</option>`).join('')}
+                    </select>
+
+                    <div class="grid-2">
+                        <div>
+                            <label>العدد (صناديق)</label>
+                            <input type="number" name="Qty" id="posQty" value="0" step="1" oninput="calcPosTotal()" />
+                        </div>
+                        <div>
+                            <label>الوزن (كجم)</label>
+                            <input type="number" name="Weight" id="posWeight" value="0" step="0.1" oninput="calcPosTotal()" />
+                        </div>
+                    </div>
+
+                    <div class="grid-2">
+                        <div>
+                            <label>السعر (جنيه)</label>
+                            <input type="number" name="Price" id="posPrice" value="0" step="0.5" required oninput="calcPosTotal()" />
+                        </div>
+                        <div>
+                            <label>الخصم</label>
+                            <input type="number" name="Discount" id="posDisc" value="0" step="1" oninput="calcPosTotal()" />
+                        </div>
+                    </div>
+
+                    <label>طريقة السداد</label>
+                    <select name="PaymentMethod" id="posPayMethod" onchange="calcPosTotal()">
+                        <option value="نقدي (كاش)">نقدي (كاش)</option>
+                        <option value="آجل على الحساب">آجل على الحساب</option>
+                        <option value="إنستاباي (InstaPay)">إنستاباي (InstaPay)</option>
+                        <option value="فودافون كاش / محفظة">فودافون كاش / محفظة</option>
+                    </select>
+
+                    <div class="card" style="margin-top:12px;background:#FDF4DF;border-right-color:#D4AF37;">
+                        <div>الإجمالي المطلوب: <b id="posTotalTxt" style="font-size:18px;color:#5A0817;">0 ج</b></div>
+                    </div>
+
+                    <button type="submit" class="submit-btn">💾 حفظ الفاتورة وتمريرها للسيرفر</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 3. تنزيل سيارة -->
+        <div id="tab-load" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">🚚 توريد وتنزيل سيارة بالأرضية</h3>
+                <form onsubmit="handleLoadSubmit(event)">
+                    <label>المورد / التاجر</label>
+                    <select name="Supplier" required>
+                        ${suppliers.map(s => `<option value="${esc(s.Name)}">${esc(s.Name)}</option>`).join('')}
+                    </select>
+                    <label>رقم / بيان السيارة</label>
+                    <input type="text" name="Vehicle" placeholder="مثال: 5412 نقل" required />
+                    <label>الصنف</label>
+                    <select name="Item" required>
+                        ${items.map(i => `<option value="${esc(i.Name)}">${esc(i.Name)}</option>`).join('')}
+                    </select>
+                    <div class="grid-2">
+                        <div>
+                            <label>العدد الوارد (صناديق)</label>
+                            <input type="number" name="QtyIn" value="0" step="1" required />
+                        </div>
+                        <div>
+                            <label>الوزن الوارد (كجم)</label>
+                            <input type="number" name="WeightIn" value="0" step="0.5" required />
+                        </div>
+                    </div>
+                    <div class="grid-2">
+                        <div>
+                            <label>نولون النقل (ج)</label>
+                            <input type="number" name="Freight" value="0" />
+                        </div>
+                        <div>
+                            <label>نسبة العمولة (%)</label>
+                            <input type="number" name="Commission" value="5" step="0.5" />
+                        </div>
+                    </div>
+                    <button type="submit" class="submit-btn">🚚 تثبيت السيارة بالأرضية</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 4. سند تحصيل -->
+        <div id="tab-col" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">🧾 تسجيل سند قبض وتحصيل</h3>
+                <form onsubmit="handleColSubmit(event)">
+                    <label>العميل</label>
+                    <select name="Customer" required>
+                        ${customers.map(c => `<option value="${esc(c.Name)}">${esc(c.Name)} (مديونية: ${Number(c.Balance || 0).toLocaleString()} ج)</option>`).join('')}
+                    </select>
+                    <label>المبلغ المحصل (جنيه)</label>
+                    <input type="number" name="Amount" step="1" required />
+                    <label>طريقة الدفع</label>
+                    <select name="PaymentMethod">
+                        <option value="نقدي (كاش)">نقدي (كاش)</option>
+                        <option value="إنستاباي (InstaPay)">إنستاباي (InstaPay)</option>
+                        <option value="فودافون كاش / محفظة">فودافون كاش / محفظة</option>
+                    </select>
+                    <label>البيان / ملاحظات</label>
+                    <input type="text" name="Notes" value="سداد دفعة بالحساب" />
+                    <button type="submit" class="submit-btn">🧾 حفظ وتأكيد سند القبض</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 5. تسجيل مصروف -->
+        <div id="tab-exp" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">💸 صرف وتسجيل مصروف</h3>
+                <form onsubmit="handleExpSubmit(event)">
+                    <label>بند المصروف</label>
+                    <select name="Category">
+                        <option value="إكراميات وعتالة الأرضية">إكراميات وعتالة الأرضية</option>
+                        <option value="بوفيه وضيافة">بوفيه وضيافة</option>
+                        <option value="نولون ونقل">نولون ونقل</option>
+                        <option value="صيانة ومستلزمات">صيانة ومستلزمات</option>
+                        <option value="مصاريف نثرية عامة">مصاريف نثرية عامة</option>
+                    </select>
+                    <label>البيان / تفاصيل الصرف</label>
+                    <input type="text" name="Description" required />
+                    <label>المبلغ المنصرف (جنيه)</label>
+                    <input type="number" name="Amount" step="1" required />
+                    <button type="submit" class="submit-btn">💸 خصم وصرف المصروف</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 6. فاتورة مشتريات -->
+        <div id="tab-pur" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">📥 تسجيل فاتورة شراء بضاعة وأصول</h3>
+                <form onsubmit="handlePurSubmit(event)">
+                    <label>بند الشراء</label>
+                    <select name="Category">
+                        <option value="شراء بضاعة تجارية (تضاف للأرضية)">شراء بضاعة تجارية (تضاف للأرضية)</option>
+                        <option value="شراء أثاث وديكور">شراء أثاث وديكور</option>
+                        <option value="شراء أجهزة وموازين">شراء أجهزة وموازين</option>
+                    </select>
+                    <label>المورد / الجهة</label>
+                    <select name="Supplier" required>
+                        ${suppliers.map(s => `<option value="${esc(s.Name)}">${esc(s.Name)}</option>`).join('')}
+                    </select>
+                    <label>الصنف / البيان</label>
+                    <input type="text" name="Item" required />
+                    <div class="grid-2">
+                        <div>
+                            <label>الكمية</label>
+                            <input type="number" name="Qty" value="1" />
+                        </div>
+                        <div>
+                            <label>الوزن (كجم)</label>
+                            <input type="number" name="Weight" value="0" />
+                        </div>
+                    </div>
+                    <div class="grid-2">
+                        <div>
+                            <label>إجمالي القيمة (ج)</label>
+                            <input type="number" name="Value" step="1" required />
+                        </div>
+                        <div>
+                            <label>المدفوع نقداً</label>
+                            <input type="number" name="PaidAmount" value="0" />
+                        </div>
+                    </div>
+                    <button type="submit" class="submit-btn">📥 حفظ فاتورة الشراء</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 7. حركة الصناديق -->
+        <div id="tab-crate" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">📦 حركة وتأمين الصناديق والبرانيك</h3>
+                <form onsubmit="handleCrateSubmit(event)">
+                    <label>العميل</label>
+                    <select name="Customer" required>
+                        ${customers.map(c => `<option value="${esc(c.Name)}">${esc(c.Name)}</option>`).join('')}
+                    </select>
+                    <label>نوع الحركة</label>
+                    <select name="Kind">
+                        <option value="تسليم">تسليم للعميل (+)</option>
+                        <option value="استرجاع">استرجاع من العميل (-)</option>
+                    </select>
+                    <div class="grid-2">
+                        <div>
+                            <label>عدد الصناديق</label>
+                            <input type="number" name="Qty" value="0" step="1" required />
+                        </div>
+                        <div>
+                            <label>سعر التأمين (ج)</label>
+                            <input type="number" name="Price" value="70" />
+                        </div>
+                    </div>
+                    <button type="submit" class="submit-btn">📦 تثبيت حركة الصناديق</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 8. ميزان بسكول -->
+        <div id="tab-wb" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">⚖️ تسجيل كارتة ميزان بسكول</h3>
+                <form onsubmit="handleWbSubmit(event)">
+                    <label>رقم السيارة</label>
+                    <input type="text" name="Vehicle" required />
+                    <label>اسم السائق</label>
+                    <input type="text" name="DriverName" value="سائق حر" />
+                    <label>المورد</label>
+                    <select name="Supplier" required>
+                        ${suppliers.map(s => `<option value="${esc(s.Name)}">${esc(s.Name)}</option>`).join('')}
+                    </select>
+                    <label>الصنف</label>
+                    <select name="Item" required>
+                        ${items.map(i => `<option value="${esc(i.Name)}">${esc(i.Name)}</option>`).join('')}
+                    </select>
+                    <div class="grid-2">
+                        <div>
+                            <label>الوزن القائم (كجم)</label>
+                            <input type="number" name="GrossWeight" step="10" required />
+                        </div>
+                        <div>
+                            <label>وزن الفارغ (كجم)</label>
+                            <input type="number" name="TareWeight" step="10" required />
+                        </div>
+                    </div>
+                    <button type="submit" class="submit-btn">⚖️ إصدار وحفظ كارتة البسكول</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 9. جرد الأرضية -->
+        <div id="tab-stock" class="tab-content">
+            <h3>🚚 بضاعة الأرضية اللحظية</h3>
+            <table>
+                <tr><th>الصنف</th><th>السيارة</th><th>باقي عدد</th><th>باقي وزن</th></tr>
+                ${(data.floor_stock || []).map(f => `
+                    <tr>
+                        <td><b>${esc(f.Item)}</b></td>
+                        <td>${esc(f.Vehicle)}</td>
+                        <td>${esc(f.QtyRemaining)} ق</td>
+                        <td>${esc(f.WeightRemaining)} ك</td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+
+        <!-- 10. دليل الحسابات -->
+        <div id="tab-master" class="tab-content">
+            <h3>👥 العملاء والموردين</h3>
+            <table>
+                <tr><th>الاسم</th><th>الصفة</th><th>المديونية / الرصيد</th></tr>
+                ${customers.map(c => `<tr><td>${esc(c.Name)}</td><td>عميل</td><td>${Number(c.Balance || 0).toLocaleString()} ج</td></tr>`).join('')}
+                ${suppliers.map(s => `<tr><td>${esc(s.Name)}</td><td>مورد</td><td>عمولة: ${esc(s.DefaultCommission || 0)}%</td></tr>`).join('')}
+            </table>
         </div>
     </div>
 
@@ -1121,42 +1182,56 @@ th { background: #5A0817; color: white; }
     const AGENCY_KEY = "${esc(key)}";
     let currentUser = JSON.parse(localStorage.getItem('mizan_staff_' + AGENCY_KEY) || 'null');
 
-    function syncUserUI() {
-        const el = document.getElementById('userStatus');
+    function syncScreenState() {
         if (currentUser && currentUser.full_name) {
-            el.innerHTML = '👤 الموظف: <b>' + currentUser.full_name + '</b> (' + (currentUser.job_title || currentUser.role) + ')';
+            document.getElementById('loginScreen').style.display = 'none';
+            document.getElementById('mainAppScreen').style.display = 'block';
+            document.getElementById('activeUserLabel').innerHTML = '👤 الموظف: <b>' + currentUser.full_name + '</b> (' + (currentUser.job_title || currentUser.role) + ')';
         } else {
-            el.innerHTML = '👤 المستخدم: غير مسجل (وضع القراءة)';
+            document.getElementById('loginScreen').style.display = 'flex';
+            document.getElementById('mainAppScreen').style.display = 'none';
         }
     }
-    syncUserUI();
+    syncScreenState();
 
-    function openLoginModal() { document.getElementById('loginModal').style.display = 'flex'; }
-    function closeLoginModal() { document.getElementById('loginModal').style.display = 'none'; }
+    function syncSelectedUserText() {
+        const sel = document.getElementById('loginUserSelect');
+        if (sel) {
+            document.getElementById('loginUserInput').value = sel.value;
+        }
+    }
 
     async function handleUserLogin(e) {
         e.preventDefault();
-        const msg = document.getElementById('loginMsg');
-        msg.textContent = 'جاري التحقق...';
+        const msg = document.getElementById('loginErrorMsg');
+        msg.textContent = 'جاري التحقق من الحساب...';
         try {
             const r = await fetch('/api/web/user-login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     agency_key: AGENCY_KEY,
-                    username: document.getElementById('mUser').value.trim(),
-                    password: document.getElementById('mPass').value
+                    username: document.getElementById('loginUserInput').value.trim(),
+                    password: document.getElementById('loginPassInput').value
                 })
             });
             const j = await r.json();
-            if (!j.success) { msg.textContent = j.message || 'خطأ في الدخول'; return; }
+            if (!j.success) { msg.textContent = j.message || 'بيانات الدخول غير صحيحة'; return; }
             currentUser = j.user;
             localStorage.setItem('mizan_staff_' + AGENCY_KEY, JSON.stringify(currentUser));
-            syncUserUI();
-            closeLoginModal();
-            alert('أهلاً بك يا ' + currentUser.full_name + ' تم تسجيل دخولك بنجاح.');
+            document.getElementById('loginPassInput').value = '';
+            msg.textContent = '';
+            syncScreenState();
         } catch {
             msg.textContent = 'تعذر الاتصال بالسيرفر.';
+        }
+    }
+
+    function handleLogout() {
+        if (confirm('هل تريد بالتأكيد تسجيل الخروج وقفل الشاشة؟')) {
+            currentUser = null;
+            localStorage.removeItem('mizan_staff_' + AGENCY_KEY);
+            syncScreenState();
         }
     }
 
@@ -1191,8 +1266,8 @@ th { background: #5A0817; color: white; }
 
     async function sendAction(action_type, data) {
         if (!currentUser || !currentUser.full_name) {
-            alert('يرجى تسجيل دخول الموظف أولاً لتسجيل هذه المعاملة باسمك.');
-            openLoginModal();
+            alert('انتهت الجلسة، يرجى تسجيل الدخول مجدداً.');
+            handleLogout();
             return false;
         }
         try {
