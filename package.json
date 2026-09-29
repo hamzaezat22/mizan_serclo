@@ -1,9 +1,9 @@
 {
-  "name": "mizan-cloud",
+  "name": "mizan_serclo",
   "version": "1.0.0",
-  "private": true,
+  "main": "api/index.js",
   "dependencies": {
-    "@upstash/redis": "^1.34.0",
-    "nodemailer": "^6.9.16"
+    "@upstash/redis": "^1.28.0",
+    "nodemailer": "^6.9.10"
   }
 }
