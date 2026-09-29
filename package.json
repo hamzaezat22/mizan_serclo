@@ -1,0 +1,8 @@
+{
+  "name": "mizan_serclo",
+  "version": "1.0.0",
+  "dependencies": {
+    "@upstash/redis": "^1.28.0",
+    "nodemailer": "^6.9.10"
+  }
+}
