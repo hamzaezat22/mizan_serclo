@@ -12,7 +12,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 const versionInfo = {
     latest_version: "2.1.0",
     download_url: "https://example.com/downloads/Mizan_Agency_Update.exe",
-    changelog: "المنظومة السحابية المتطابقة 100% مع تطبيق الديسكتوب"
+    changelog: "الواجهة السحابية الشاملة لكافة أقسام وخدمات الوكالة الـ 16"
 };
 
 const sendJson = (res, status, obj) => {
@@ -336,15 +336,6 @@ module.exports = async (req, res) => {
                     document.getElementById('openPortalBtn').href=j.link;
                   }).catch(function(){btn.disabled=false;show('تعذر الاتصال بالسيرفر',false);});
                 });
-                document.getElementById('resend').addEventListener('click',function(){
-                  var b=this;b.disabled=true;show('',false);
-                  fetch('/api/resend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u})})
-                  .then(function(r){return r.json();})
-                  .then(function(j){
-                    b.disabled=false;
-                    show(j.success?('تم إرسال كود جديد إلى '+j.sent_to):(j.message||'حدث خطأ'),!!j.success);
-                  }).catch(function(){b.disabled=false;show('تعذر الاتصال بالسيرفر',false);});
-                });
                 function copyFrom(id){var el=document.getElementById(id);el.select();if(navigator.clipboard){navigator.clipboard.writeText(el.value);}}
                 `));
         }
@@ -482,7 +473,7 @@ module.exports = async (req, res) => {
             return sendJson(res, 200, { success: true, message: "تم استقبال كامل جداول الوكالة بالسيرفر السحابي بنجاح." });
         }
 
-        // سحب العمليات المنشأة سحابياً إلى الديسكتوب (كل 3 ثوانٍ)
+        // سحب العمليات المنشأة سحابياً إلى الديسكتوب
         if (pathname === '/api/mobile/orders' && req.method === 'GET') {
             const agency_key = String(query.key || req.headers['x-api-key'] || '').trim();
             if (!agency_key) return sendJson(res, 400, { success: false, message: "كود الوكالة مطلوب." });
@@ -578,7 +569,7 @@ module.exports = async (req, res) => {
                             Weight: Number(it.Weight || 0),
                             Price: Number(it.Price || 0),
                             Discount: Number(it.Discount || 0),
-                            Value: Number(it.Value || (it.Weight > 0 ? it.Weight * it.Price : it.Qty * it.Price)),
+                            Value: Number(it.Value || 0),
                             PaidAmount: Number(idx === 0 ? (data.PaidAmount || 0) : 0),
                             RemainingAmount: Number(idx === 0 ? (data.RemainingAmount || 0) : 0),
                             PaymentMethod: data.PaymentMethod || "نقدي (كاش)",
@@ -653,13 +644,41 @@ module.exports = async (req, res) => {
                         CreatedBy: authorFormatted
                     });
                     break;
+                case 'CRATE_DELIVERY':
+                case 'CRATE_RETURN':
+                    queuedOrders.push({
+                        ActionType: action_type,
+                        Date: dateStr,
+                        Customer: data.Customer,
+                        Kind: action_type === 'CRATE_RETURN' ? 'استرجاع' : 'تسليم',
+                        CrateType: data.CrateType || "برنيكة بلاستيك",
+                        Qty: Number(data.Qty || 0),
+                        Price: Number(data.Price || 70),
+                        Amount: Number(data.Amount || (data.Qty * (data.Price || 70))),
+                        CreatedBy: authorFormatted
+                    });
+                    break;
+                case 'WEIGHBRIDGE_TICKET':
+                    queuedOrders.push({
+                        ActionType: 'WEIGHBRIDGE_TICKET',
+                        TicketNo: `WB-${prefix}-${seq}`,
+                        Date: dateStr,
+                        Vehicle: data.Vehicle,
+                        DriverName: data.DriverName || "سائق حر",
+                        Supplier: data.Supplier,
+                        Item: data.Item,
+                        GrossWeight: Number(data.GrossWeight || 0),
+                        TareWeight: Number(data.TareWeight || 0),
+                        CreatedBy: authorFormatted
+                    });
+                    break;
             }
 
             await redis.set(queueKey, queuedOrders, { ex: 60 * 60 * 24 * 7 });
             return sendJson(res, 200, { success: true, message: `تم تسجيل المعاملة بنجاح باسم [${authorFormatted}] وتمريرها للمزامنة الفورية.` });
         }
 
-        // بوابة الويب السحابية الشاملة لكافة الأقسام والخدمات مع شريط فلتر التاريخ والعمليات
+        // 13. بوابة الويب السحابية الملكية الشاملة لكافة الأقسام الـ 16 كاملة
         if (pathname === '/app') {
             const key = String(query.key || '').trim();
             const data = key ? await redis.get(`agency:${key}`) : null;
@@ -690,6 +709,7 @@ module.exports = async (req, res) => {
             const collections = Array.isArray(data.collections) ? data.collections : [];
             const expenses = Array.isArray(data.expenses) ? data.expenses : [];
             const purchases = Array.isArray(data.purchases) ? data.purchases : [];
+            const crates = Array.isArray(data.crates) ? data.crates : [];
             const bankAccounts = Array.isArray(data.bank_accounts) ? data.bank_accounts : [];
             const checks = Array.isArray(data.checks) ? data.checks : [];
             const weighbridgeTickets = Array.isArray(data.weighbridge_tickets) ? data.weighbridge_tickets : [];
@@ -708,7 +728,7 @@ module.exports = async (req, res) => {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(data.agency_name)} | المنظومة السحابية الشاملة</title>
+<title>${esc(data.agency_name)} | منظومة ميزان السحابية الشاملة</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Aref+Ruqaa:wght@700&display=swap');
 body { font-family: 'Cairo', -apple-system, Tahoma, sans-serif; background: #200308; margin: 0; padding: 12px; color: #FAF4F1; }
@@ -785,7 +805,7 @@ th { background: #5A0817; color: white; }
         </div>
     </div>
 
-    <!-- 2. الشاشة الرئيسية لجميع الأقسام والخدمات -->
+    <!-- 2. الشاشة الرئيسية لجميع الأقسام والخدمات الـ 16 الشاملة -->
     <div id="mainAppScreen">
         <div class="header">
             <h2>🏢 ${esc(data.agency_name)}</h2>
@@ -807,15 +827,23 @@ th { background: #5A0817; color: white; }
             <button type="button" class="quick-btn" onclick="setDateRange('all')">عرض الكل</button>
         </div>
 
+        <!-- شريط التنقل لكافة أقسام المنظومة الـ 16 -->
         <div class="nav-scroll">
             <button class="tab-btn active" onclick="switchTab('tab-dash', this)">📊 المؤشرات الحية</button>
             <button class="tab-btn" onclick="switchTab('tab-pos', this)">🛒 نقطة البيع (POS)</button>
             <button class="tab-btn" onclick="switchTab('tab-sales-reg', this)">📋 سجل المبيعات</button>
-            <button class="tab-btn" onclick="switchTab('tab-load', this)">🚚 تنزيل سيارة بالأرضية</button>
-            <button class="tab-btn" onclick="switchTab('tab-stock', this)">📦 جرد الأرضية</button>
+            <button class="tab-btn" onclick="switchTab('tab-load', this)">🚚 ساحة توريد السيارات</button>
+            <button class="tab-btn" onclick="switchTab('tab-settle', this)">🚛 تصفية سيارات الأمانة</button>
+            <button class="tab-btn" onclick="switchTab('tab-stock', this)">📦 جرد بضاعة الأرضية</button>
             <button class="tab-btn" onclick="switchTab('tab-col', this)">🧾 سندات التحصيل</button>
+            <button class="tab-btn" onclick="switchTab('tab-pending', this)">📄 الفواتير الآجلة</button>
             <button class="tab-btn" onclick="switchTab('tab-exp', this)">💸 الخزينة والمصروفات</button>
+            <button class="tab-btn" onclick="switchTab('tab-pur', this)">📥 فواتير المشتريات</button>
+            <button class="tab-btn" onclick="switchTab('tab-crate', this)">📦 حركة الصناديق والرهن</button>
+            <button class="tab-btn" onclick="switchTab('tab-bank', this)">🏦 البنوك والشيكات</button>
+            <button class="tab-btn" onclick="switchTab('tab-wb', this)">⚖️ ميزان بسكول</button>
             <button class="tab-btn" onclick="switchTab('tab-master', this)">👥 دليل الحسابات</button>
+            <button class="tab-btn" onclick="switchTab('tab-printer', this)">🖨️ إعدادات الطابعات والشبكة</button>
         </div>
 
         <!-- 1. المؤشرات الحية -->
@@ -838,7 +866,7 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 2. نقطة البيع (POS) -->
+        <!-- 2. نقطة البيع وسلة الفواتير (POS) -->
         <div id="tab-pos" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">🛒 إصدار فاتورة مبيعات سحابية</h3>
@@ -899,7 +927,7 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 3. سجل المبيعات -->
+        <!-- 3. سجل المبيعات واليومية المفصلة -->
         <div id="tab-sales-reg" class="tab-content">
             <div style="display:flex;justify-content:space-between;align-items:center;">
                 <h3 style="margin:0;">📋 سجل فواتير المبيعات</h3>
@@ -926,7 +954,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 4. ساحة توريد السيارات وتنزيل الحمولات (مع سلة أصناف متعددة) -->
+        <!-- 4. ساحة توريد وتنزيل السيارات (سلة أصناف متعددة) -->
         <div id="tab-load" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">🚚 توريد وتنزيل سيارة بالأرضية (سلة أصناف متعددة)</h3>
@@ -955,7 +983,6 @@ th { background: #5A0817; color: white; }
                     </div>
                 </div>
 
-                <!-- سلة إضافة الأصناف للسيارة -->
                 <div style="background:#F9FAFB;border:1px solid #D4AF37;border-radius:8px;padding:10px;margin-top:12px;">
                     <h4 style="margin:0 0 8px 0;color:#5A0817;">📦 إضافة صنف لحمولة السيارة:</h4>
                     <div class="grid-2">
@@ -977,7 +1004,6 @@ th { background: #5A0817; color: white; }
                     <button type="button" class="btn" style="background:#0D7857;margin-top:10px;" onclick="addItemToLoadCart()">➕ إضافة الصنف للسيارة</button>
                 </div>
 
-                <!-- جدول محتويات حمولة السيارة -->
                 <h4 style="margin:12px 0 4px 0;">الأصناف المحملة على هذه السيارة:</h4>
                 <table id="loadItemsTable">
                     <thead><tr><th>الصنف</th><th>العدد</th><th>الوزن</th><th>حذف</th></tr></thead>
@@ -990,7 +1016,24 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 5. جرد الأرضية -->
+        <!-- 5. تصفية سيارات الأمانة والتوالف -->
+        <div id="tab-settle" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">🚛 تصفية وإقفال سيارة أمانة وحساب الفلاح</h3>
+                <label>اختر السيارة للتصفية</label>
+                <select id="settleLoadSelect" onchange="updateSettlePreview()">
+                    <option value="">-- اختر السيارة --</option>
+                    ${loads.map(l => `<option value="${esc(getSupplier(l))} | ${esc(getVehicle(l))} | ${esc(getDate(l))}" data-supplier="${esc(getSupplier(l))}" data-vehicle="${esc(getVehicle(l))}" data-freight="${l.Freight || l.freight || 0}" data-comm="${l.Commission || l.commission || 5}">${esc(getSupplier(l))} | ${esc(getVehicle(l))} (${esc(getItem(l))})</option>`).join('')}
+                </select>
+                <div id="settlePreviewBox" style="margin-top:12px;display:none;" class="card">
+                    <div>المورد: <b id="settleSuppTxt"></b></div>
+                    <div>نولون النقل: <b id="settleFreightTxt">0 ج</b></div>
+                    <div>نسبة العمولة: <b id="settleCommTxt">5%</b></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 6. جرد بضاعة الأرضية اللحظي -->
         <div id="tab-stock" class="tab-content">
             <h3>🚚 بضاعة الأرضية والسيارات المفتوحة (${esc(floorStock.length)})</h3>
             <table>
@@ -1007,7 +1050,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 6. سندات التحصيل -->
+        <!-- 7. سندات التحصيل والمقبوضات -->
         <div id="tab-col" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">🧾 تسجيل سند قبض وتحصيل</h3>
@@ -1050,7 +1093,24 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 7. الخزينة والمصروفات -->
+        <!-- 8. الفواتير الآجلة والذمم -->
+        <div id="tab-pending" class="tab-content">
+            <h3>📄 كشف الفواتير الآجلة غير المسددة بالكامل</h3>
+            <table>
+                <tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الإجمالي</th><th>المتبقي الآجل</th></tr>
+                ${recentSales.filter(s => (s.RemainingAmount || s.remainingAmount) > 0).map(s => `
+                    <tr>
+                        <td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td>
+                        <td>${esc(s.Date || s.date)}</td>
+                        <td>${esc(s.Customer || s.customer)}</td>
+                        <td>${Number(s.Value || s.value || 0).toLocaleString()} ج</td>
+                        <td style="color:#DC2626;font-weight:bold;">${Number(s.RemainingAmount || s.remainingAmount || 0).toLocaleString()} ج</td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+
+        <!-- 9. الخزينة والمصروفات والرواتب -->
         <div id="tab-exp" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">💸 صرف وتسجيل مصروف</h3>
@@ -1061,6 +1121,7 @@ th { background: #5A0817; color: white; }
                         <option value="بوفيه وضيافة">بوفيه وضيافة</option>
                         <option value="نولون ونقل">نولون ونقل</option>
                         <option value="صيانة ومستلزمات">صيانة ومستلزمات</option>
+                        <option value="رواتب موظفين وعمال">رواتب موظفين وعمال</option>
                         <option value="مصاريف نثرية عامة">مصاريف نثرية عامة</option>
                     </select>
                     <label>البيان / تفاصيل الصرف</label>
@@ -1090,7 +1151,125 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 8. دليل الحسابات -->
+        <!-- 10. فواتير المشتريات والأصول -->
+        <div id="tab-pur" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">📥 تسجيل فاتورة شراء بضاعة وأصول</h3>
+                <form onsubmit="handlePurSubmit(event)">
+                    <label>بند الشراء</label>
+                    <select name="Category">
+                        <option value="شراء بضاعة تجارية (تضاف للأرضية)">شراء بضاعة تجارية (تضاف للأرضية)</option>
+                        <option value="شراء أثاث وديكور">شراء أثاث وديكور</option>
+                        <option value="شراء أجهزة وموازين">شراء أجهزة وموازين</option>
+                    </select>
+                    <label>المورد / الجهة</label>
+                    <select name="Supplier" required>
+                        ${suppliers.map(s => `<option value="${esc(getName(s))}">${esc(getName(s))}</option>`).join('')}
+                    </select>
+                    <label>الصنف / البيان</label>
+                    <input type="text" name="Item" required />
+                    <div class="grid-2">
+                        <div>
+                            <label>الكمية</label>
+                            <input type="number" name="Qty" value="1" />
+                        </div>
+                        <div>
+                            <label>الوزن (كجم)</label>
+                            <input type="number" name="Weight" value="0" />
+                        </div>
+                    </div>
+                    <div class="grid-2">
+                        <div>
+                            <label>إجمالي القيمة (ج)</label>
+                            <input type="number" name="Value" step="1" required />
+                        </div>
+                        <div>
+                            <label>المدفوع نقداً</label>
+                            <input type="number" name="PaidAmount" value="0" />
+                        </div>
+                    </div>
+                    <button type="submit" class="submit-btn">📥 حفظ فاتورة الشراء</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 11. حركة وتأمين الصناديق والبرانيك -->
+        <div id="tab-crate" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">📦 حركة وتأمين الصناديق والبرانيك</h3>
+                <form onsubmit="handleCrateSubmit(event)">
+                    <label>العميل</label>
+                    <select name="Customer" required>
+                        ${customers.map(c => `<option value="${esc(getName(c))}">${esc(getName(c))}</option>`).join('')}
+                    </select>
+                    <label>نوع الحركة</label>
+                    <select name="Kind">
+                        <option value="تسليم">تسليم للعميل (+)</option>
+                        <option value="استرجاع">استرجاع من العميل (-)</option>
+                    </select>
+                    <div class="grid-2">
+                        <div>
+                            <label>عدد الصناديق</label>
+                            <input type="number" name="Qty" value="0" step="1" required />
+                        </div>
+                        <div>
+                            <label>سعر التأمين (ج)</label>
+                            <input type="number" name="Price" value="70" />
+                        </div>
+                    </div>
+                    <button type="submit" class="submit-btn">📦 تثبيت حركة الصناديق</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 12. البنوك والشيكات ومراكز التكلفة -->
+        <div id="tab-bank" class="tab-content">
+            <h3>🏦 الحسابات البنكية والشيكات</h3>
+            <table>
+                <tr><th>البنك / الحساب</th><th>رقم الحساب</th><th>الرصيد</th></tr>
+                ${bankAccounts.map(b => `
+                    <tr>
+                        <td><b>${esc(b.BankName || b.bankName)}</b> (${esc(b.AccountName || b.accountName)})</td>
+                        <td>${esc(b.AccountNumber || b.accountNumber)}</td>
+                        <td>${Number(b.Balance || b.balance || 0).toLocaleString()} ج</td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+
+        <!-- 13. ميزان بسكول السيارات -->
+        <div id="tab-wb" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">⚖️ تسجيل كارتة ميزان بسكول</h3>
+                <form onsubmit="handleWbSubmit(event)">
+                    <label>رقم السيارة</label>
+                    <input type="text" name="Vehicle" required />
+                    <label>اسم السائق</label>
+                    <input type="text" name="DriverName" value="سائق حر" />
+                    <label>المورد</label>
+                    <select name="Supplier" required>
+                        ${suppliers.map(s => `<option value="${esc(getName(s))}">${esc(getName(s))}</option>`).join('')}
+                    </select>
+                    <label>الصنف</label>
+                    <select name="Item" required>
+                        ${items.map(i => `<option value="${esc(getName(i))}">${esc(getName(i))}</option>`).join('')}
+                    </select>
+                    <div class="grid-2">
+                        <div>
+                            <label>الوزن القائم (كجم)</label>
+                            <input type="number" name="GrossWeight" step="10" required />
+                        </div>
+                        <div>
+                            <label>وزن الفارغ (كجم)</label>
+                            <input type="number" name="TareWeight" step="10" required />
+                        </div>
+                    </div>
+                    <button type="submit" class="submit-btn">⚖️ إصدار وحفظ كارتة البسكول</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- 14. دليل الحسابات (Master Data) -->
         <div id="tab-master" class="tab-content">
             <h3>👥 العملاء والموردين (${customers.length} عميل / ${suppliers.length} مورد)</h3>
             <table>
@@ -1099,7 +1278,34 @@ th { background: #5A0817; color: white; }
                 ${suppliers.map(s => `<tr><td>${esc(getName(s))}</td><td>مورد</td><td>عمولة: ${esc(s.DefaultCommission || s.defaultCommission || 0)}%</td></tr>`).join('')}
             </table>
         </div>
+
+        <!-- 15. إعدادات الطابعات والشبكة والطباعة من الهاتف -->
+        <div id="tab-printer" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">🖨️ إعدادات الطابعات والشبكة (Mobile &amp; Thermal Printing)</h3>
+                <label>مقاس الطباعة الافتراضي على الهاتف والمتصفح</label>
+                <select id="webPrinterSize" onchange="savePrinterPrefs()">
+                    <option value="80mm">حراري 80mm رول كاشير (بلوتوث / شبكة)</option>
+                    <option value="58mm">حراري 58mm رول صغير</option>
+                    <option value="A5">ورق عادي A5 (نصف ورقة)</option>
+                    <option value="A4">ورق عادي A4 (ورقة كاملة)</option>
+                </select>
+
+                <label>عنوان IP طابعة الشبكة الحرارية (Network Thermal IP / اختياري)</label>
+                <input type="text" id="netPrinterIp" placeholder="مثال: 192.168.1.200:9100" onchange="savePrinterPrefs()" />
+
+                <label>
+                    <input type="checkbox" id="chkAutoPrintWeb" onchange="savePrinterPrefs()" checked />
+                    تشغيل نافذة الطباعة تلقائياً فور حفظ الفاتورة على الهاتف
+                </label>
+
+                <button type="button" class="submit-btn" style="background:#0D7857;" onclick="testWebPrint()">🖨️ تجربة طباعة إيصال اختباري الآن</button>
+            </div>
+        </div>
     </div>
+
+    <!-- مساحة الطباعة المخفية المجهزة للفواتير -->
+    <div id="printArea"></div>
 
     <script>
     const AGENCY_KEY = "${esc(key)}";
@@ -1166,7 +1372,6 @@ th { background: #5A0817; color: white; }
         btn.classList.add('active');
     }
 
-    // محرك فلتر التاريخ اللحظي
     function setDateRange(type) {
         const today = new Date().toISOString().slice(0, 10);
         const fromInput = document.getElementById('filterFromDate');
@@ -1272,6 +1477,55 @@ th { background: #5A0817; color: white; }
         }
     }
 
+    function savePrinterPrefs() {
+        const pSize = document.getElementById('webPrinterSize').value;
+        const pIp = document.getElementById('netPrinterIp').value;
+        const pAuto = document.getElementById('chkAutoPrintWeb').checked;
+        localStorage.setItem('mizan_print_size', pSize);
+        localStorage.setItem('mizan_print_ip', pIp);
+        localStorage.setItem('mizan_print_auto', pAuto ? '1' : '0');
+    }
+
+    function loadPrinterPrefs() {
+        const pSize = localStorage.getItem('mizan_print_size') || '80mm';
+        const pIp = localStorage.getItem('mizan_print_ip') || '';
+        const pAuto = localStorage.getItem('mizan_print_auto') !== '0';
+        if (document.getElementById('webPrinterSize')) document.getElementById('webPrinterSize').value = pSize;
+        if (document.getElementById('netPrinterIp')) document.getElementById('netPrinterIp').value = pIp;
+        if (document.getElementById('chkAutoPrintWeb')) document.getElementById('chkAutoPrintWeb').checked = pAuto;
+    }
+    setTimeout(loadPrinterPrefs, 100);
+
+    function testWebPrint() {
+        printInvoiceReceipt({
+            agencyName: "${esc(data.agency_name)}",
+            invoiceNo: "SRV-TEST-001",
+            customer: "عميل تجريبي",
+            item: "طماطم فاخرة",
+            qty: 50,
+            weight: 125.0,
+            price: 15.0,
+            total: 1875.0,
+            paid: 1875.0,
+            remaining: 0
+        });
+    }
+
+    function printInvoiceReceipt(inv) {
+        const area = document.getElementById('printArea');
+        area.innerHTML = \`
+            <div style="font-family:Tahoma,sans-serif;width:280px;margin:auto;text-align:right;font-size:12px;padding:10px;">
+                <h3 style="text-align:center;margin:0 0 5px 0;">\${inv.agencyName}</h3>
+                <div style="text-align:center;font-size:11px;border-bottom:1px dashed #000;padding-bottom:5px;">فاتورة مبيعات #\${inv.invoiceNo}</div>
+                <div style="margin:6px 0;">العميل: \${inv.customer}</div>
+                <div style="margin:6px 0;">الصنف: \${inv.item} (\${inv.qty}ق / \${inv.weight}ك @ \${inv.price}ج)</div>
+                <div style="font-weight:bold;font-size:14px;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:5px 0;">الإجمالي: \${inv.total.toLocaleString()} جنيه</div>
+                <div style="text-align:center;margin-top:10px;font-size:10px;">منظومة ميزان السحابية</div>
+            </div>
+        \`;
+        window.print();
+    }
+
     async function sendAction(action_type, data) {
         if (!currentUser || !currentUser.full_name) {
             alert('انتهت الجلسة، يرجى تسجيل الدخول مجدداً.');
@@ -1338,7 +1592,24 @@ th { background: #5A0817; color: white; }
         };
 
         const ok = await sendAction('SALE_INVOICE', data);
-        if (ok) { f.reset(); calcPosTotal(); }
+        if (ok) {
+            if (document.getElementById('chkAutoPrintWeb')?.checked) {
+                printInvoiceReceipt({
+                    agencyName: "${esc(data.agency_name)}",
+                    invoiceNo: "SRV-AUTO",
+                    customer: f.Customer.value,
+                    item: f.Item.value,
+                    qty: q,
+                    weight: w,
+                    price: p,
+                    total: val,
+                    paid: isCash ? val : 0,
+                    remaining: isCash ? 0 : val
+                });
+            }
+            f.reset();
+            calcPosTotal();
+        }
     }
 
     async function handleColSubmit(e) {
@@ -1364,6 +1635,53 @@ th { background: #5A0817; color: white; }
             PaymentMethod: 'نقدي (كاش)'
         };
         const ok = await sendAction('EXPENSE', data);
+        if (ok) f.reset();
+    }
+
+    async function handlePurSubmit(e) {
+        e.preventDefault();
+        const f = e.target;
+        const val = parseFloat(f.Value.value) || 0;
+        const paid = parseFloat(f.PaidAmount.value) || 0;
+        const data = {
+            Category: f.Category.value,
+            Supplier: f.Supplier.value,
+            Item: f.Item.value,
+            Qty: parseFloat(f.Qty.value) || 1,
+            Weight: parseFloat(f.Weight.value) || 0,
+            Value: val,
+            PaidAmount: paid,
+            RemainingAmount: Math.max(0, val - paid),
+            PaymentMethod: 'نقدي (كاش)'
+        };
+        const ok = await sendAction('PURCHASE', data);
+        if (ok) f.reset();
+    }
+
+    async function handleCrateSubmit(e) {
+        e.preventDefault();
+        const f = e.target;
+        const data = {
+            Customer: f.Customer.value,
+            Qty: parseFloat(f.Qty.value) || 0,
+            Price: parseFloat(f.Price.value) || 70
+        };
+        const ok = await sendAction(f.Kind.value === 'استرجاع' ? 'CRATE_RETURN' : 'CRATE_DELIVERY', data);
+        if (ok) f.reset();
+    }
+
+    async function handleWbSubmit(e) {
+        e.preventDefault();
+        const f = e.target;
+        const data = {
+            Vehicle: f.Vehicle.value,
+            DriverName: f.DriverName.value,
+            Supplier: f.Supplier.value,
+            Item: f.Item.value,
+            GrossWeight: parseFloat(f.GrossWeight.value) || 0,
+            TareWeight: parseFloat(f.TareWeight.value) || 0
+        };
+        const ok = await sendAction('WEIGHBRIDGE_TICKET', data);
         if (ok) f.reset();
     }
 
