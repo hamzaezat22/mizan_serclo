@@ -12,7 +12,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 const versionInfo = {
     latest_version: "2.1.0",
     download_url: "https://example.com/downloads/Mizan_Agency_Update.exe",
-    changelog: "الواجهة السحابية الشاملة لكافة أقسام وخدمات الوكالة الـ 16"
+    changelog: "المنظومة السحابية الموحدة المتوافقة 100% مع أجهزة الكمبيوتر وموازين الأسواق"
 };
 
 const sendJson = (res, status, obj) => {
@@ -31,7 +31,7 @@ async function readJson(req) {
     let s = '';
     for await (const chunk of req) {
         s += chunk;
-        if (s.length > 20_000_000) throw new Error('حجم البيانات كبير جداً');
+        if (s.length > 25_000_000) throw new Error('حجم البيانات كبير جداً');
     }
     return JSON.parse(s || '{}');
 }
@@ -157,7 +157,7 @@ const originOf = req => `https://${req.headers['x-forwarded-host'] || req.header
 const STYLE = `
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Aref+Ruqaa:wght@700&display=swap');
 body { font-family: 'Cairo', -apple-system, Tahoma, sans-serif; background: #200308; color: #FAF4F1; padding: 12px; text-align: center; margin: 0; }
-.box { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 14px; max-width: 450px; margin: 25px auto; padding: 25px; text-align: right; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+.box { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 14px; max-width: 480px; margin: 25px auto; padding: 25px; text-align: right; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
 h2 { color: #D4AF37; text-align: center; margin-top: 0; }
 label { font-size: 13px; color: #C8B8B5; display: block; margin-top: 10px; font-weight: bold; }
 input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 4px; border-radius: 6px; border: 1.2px solid #D4AF37; font-size: 14px; background: #FAF4F1; color: #1E1E1E; font-family: inherit; font-weight: 600; }
@@ -196,11 +196,91 @@ module.exports = async (req, res) => {
         if (pathname === '/' || pathname === '') {
             return sendHtml(res, 200, shell('خادم ميزان السحابي', `
                 <div class="box" style="text-align:center">
-                    <h2>🚀 خادم ميزان السحابي المتكامل</h2>
-                    <p style="color:#C8B8B5;">إدارة ومتابعة ومزامنة كافة عمليات الوكالة لحظة بلحظة.</p>
+                    <h2>🚀 خادم ميزان السحابي الموحد</h2>
+                    <p style="color:#C8B8B5;">إدارة ومتابعة ومزامنة كافة عمليات الوكالة لحظة بلحظة مع أجهزة الكمبيوتر والموازين.</p>
                     <a class="btn" href="/login">🔑 تسجيل الدخول السحابي</a>
                     <a class="btn small" href="/register">📝 إنشاء حساب وكالة جديد</a>
                 </div>`));
+        }
+
+        // مسار استعراض الفاتورة الإلكترونية عبر مسح كود الـ QR
+        if (pathname === '/invoice' || pathname === '/api/invoice') {
+            const invNo = String(query.id || query.inv || '').trim();
+            const key = String(query.key || '').trim();
+
+            let targetAgencyData = null;
+            if (key) {
+                targetAgencyData = await redis.get(`agency:${key}`);
+            } else {
+                // البحث في الوكالات النشطة عن رقم الفاتورة
+                const keys = await redis.keys('agency:*');
+                for (const k of keys.slice(0, 20)) {
+                    const d = await redis.get(k);
+                    if (d && Array.isArray(d.recent_sales) && d.recent_sales.some(s => String(s.InvoiceNo || s.invoiceNo) === invNo)) {
+                        targetAgencyData = d;
+                        break;
+                    }
+                }
+            }
+
+            const sales = targetAgencyData && Array.isArray(targetAgencyData.recent_sales)
+                ? targetAgencyData.recent_sales.filter(s => String(s.InvoiceNo || s.invoiceNo) === invNo)
+                : [];
+
+            if (!sales || sales.length === 0) {
+                return sendHtml(res, 404, shell('فاتورة غير موجودة', `
+                    <div class="box" style="text-align:center;">
+                        <h2>⚠️ لم يتم العثور على الفاتورة</h2>
+                        <p style="color:#C8B8B5;">رقم الفاتورة المطلوبة [${esc(invNo)}] غير مسجل في السيرفر السحابي أو تم أرشفته.</p>
+                    </div>`));
+            }
+
+            const first = sales[0];
+            const totalVal = sales.reduce((acc, x) => acc + Number(x.Value || x.value || 0), 0);
+            const paidVal = Number(first.PaidAmount || first.paidAmount || 0);
+            const remVal = Math.max(0, totalVal - paidVal);
+
+            return sendHtml(res, 200, `<!DOCTYPE html>
+<html dir="rtl" lang="ar">
+<head>
+<meta charset="UTF-8"><title>فاتورة إلكترونية معتمدة #${esc(invNo)}</title>
+<style>
+body { font-family: Tahoma, Cairo, sans-serif; background: #FAF4F1; padding: 20px; color: #1E1E1E; direction: rtl; }
+.card { background: #FFF; max-width: 480px; margin: auto; padding: 24px; border-radius: 12px; border: 1.5px solid #5A0817; box-shadow: 0 8px 24px rgba(0,0,0,0.1); }
+h2 { color: #5A0817; text-align: center; margin-top: 0; }
+table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+th, td { padding: 8px; border-bottom: 1px solid #DDD; text-align: right; font-size: 13px; }
+th { background: #5A0817; color: white; }
+.tot { font-size: 17px; font-weight: bold; color: #0D7857; margin-top: 12px; text-align: left; }
+</style>
+</head>
+<body>
+<div class="card">
+    <h2>🏢 ${esc(targetAgencyData.agency_name || "وكالة ميزان")}</h2>
+    <div style="text-align:center;font-weight:bold;color:#5A0817;">📄 فاتورة مبيعات إلكترونية معتمدة #${esc(invNo)}</div>
+    <div style="font-size:12px;color:#666;text-align:center;margin-bottom:10px;">التاريخ: ${esc(first.Date || first.date)} | العميل: <b>${esc(first.Customer || first.customer)}</b></div>
+    <table>
+        <thead><tr><th>الصنف</th><th>العدد</th><th>الوزن</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+        <tbody>
+            ${sales.map(s => `<tr>
+                <td><b>${esc(s.Item || s.item)}</b></td>
+                <td>${Number(s.Qty || s.qty || 0).toLocaleString()} ق</td>
+                <td>${Number(s.Weight || s.weight || 0).toLocaleString()} ك</td>
+                <td>${Number(s.Price || s.price || 0).toLocaleString()} ج</td>
+                <td>${Number(s.Value || s.value || 0).toLocaleString()} ج</td>
+            </tr>`).join('')}
+        </tbody>
+    </table>
+    <div class="tot">المجموع الكلي: ${totalVal.toLocaleString()} جنيه</div>
+    <div style="margin-top:6px;font-size:13px;display:flex;justify-content:space-between;">
+        <span>المدفوع: ${paidVal.toLocaleString()} ج</span>
+        <span style="color:#DC2626;font-weight:bold;">المتبقي: ${remVal.toLocaleString()} ج</span>
+    </div>
+    <div style="margin-top:15px;text-align:center;font-size:11px;color:#888;border-top:1px dashed #CCC;padding-top:10px;">
+        ⚖️ منظومة ميزان السحابية لإدارة ومحاسبة الوكالات والأسواق
+    </div>
+</div>
+</body></html>`);
         }
 
         if (pathname === '/register' && req.method === 'GET') {
@@ -431,7 +511,7 @@ module.exports = async (req, res) => {
             });
         }
 
-        // استقبال ومزامنة كامل جداول المنظومة من الديسكتوب
+        // استقبال ومزامنة كامل جداول المنظومة من أجهزة الكمبيوتر
         if ((pathname === '/api/sync/push' || pathname === '/api/sync') && req.method === 'POST') {
             let body = await readJson(req);
             const agency_key = String(body.agency_key || body.key || body.apiKey || req.headers['x-api-key'] || query.key || '').trim();
@@ -535,7 +615,7 @@ module.exports = async (req, res) => {
             return sendJson(res, 401, { success: false, message: "بيانات الدخول غير صحيحة." });
         }
 
-        // إنشاء العمليات (إضافة، تعديل، حذف) وتوجيهها لطابور الديسكتوب
+        // إنشاء العمليات (إضافة، تعديل، حذف) مع تزويد كل عملية بـ OrderId فريد لمنع تكرار المزامنة
         if (pathname === '/api/web/create-action' && req.method === 'POST') {
             let b = await readJson(req);
             const { agency_key, action_type, user_name, data, source } = b;
@@ -548,6 +628,7 @@ module.exports = async (req, res) => {
             const authorFormatted = `${user_name || "مستخدم"} (${source === 'mobile' ? 'مستخدم الهاتف' : 'مستخدم السيرفر'})`;
             const prefix = source === 'mobile' ? 'MOB' : 'SRV';
             const seq = Math.floor(1000 + Math.random() * 9000);
+            const uniqueOrderId = `ORD-${Date.now()}-${seq}`;
 
             switch (action_type) {
                 case 'SALE_INVOICE': {
@@ -556,6 +637,7 @@ module.exports = async (req, res) => {
                     items.forEach((it, idx) => {
                         queuedOrders.push({
                             ActionType: 'SALE_INVOICE',
+                            OrderId: uniqueOrderId,
                             InvoiceNo: invNo,
                             Date: dateStr,
                             Customer: data.Customer || "عميل نقدي",
@@ -579,12 +661,13 @@ module.exports = async (req, res) => {
                     break;
                 }
                 case 'DELETE_INVOICE':
-                    queuedOrders.push({ ActionType: 'DELETE_INVOICE', InvoiceNo: data.InvoiceNo, CreatedBy: authorFormatted });
+                    queuedOrders.push({ ActionType: 'DELETE_INVOICE', OrderId: uniqueOrderId, InvoiceNo: data.InvoiceNo, CreatedBy: authorFormatted });
                     break;
                 case 'LOAD_SUPPLY': {
                     const items = Array.isArray(data.Items) ? data.Items : [{ Item: data.Item, QtyIn: Number(data.QtyIn || 0), WeightIn: Number(data.WeightIn || 0) }];
                     queuedOrders.push({
                         ActionType: 'LOAD_SUPPLY',
+                        OrderId: uniqueOrderId,
                         Date: dateStr,
                         Vehicle: data.Vehicle,
                         Supplier: data.Supplier,
@@ -600,6 +683,7 @@ module.exports = async (req, res) => {
                 case 'COLLECTION':
                     queuedOrders.push({
                         ActionType: 'COLLECTION',
+                        OrderId: uniqueOrderId,
                         ReceiptNo: `REC-${prefix}-${seq}`,
                         Date: dateStr,
                         Customer: data.Customer,
@@ -610,11 +694,12 @@ module.exports = async (req, res) => {
                     });
                     break;
                 case 'DELETE_COLLECTION':
-                    queuedOrders.push({ ActionType: 'DELETE_COLLECTION', ReceiptNo: data.ReceiptNo, CreatedBy: authorFormatted });
+                    queuedOrders.push({ ActionType: 'DELETE_COLLECTION', OrderId: uniqueOrderId, ReceiptNo: data.ReceiptNo, CreatedBy: authorFormatted });
                     break;
                 case 'EXPENSE':
                     queuedOrders.push({
                         ActionType: 'EXPENSE',
+                        OrderId: uniqueOrderId,
                         Date: dateStr,
                         Category: data.Category || "مصاريف نثرية عامة",
                         Description: data.Description || `صرف نثري`,
@@ -624,11 +709,12 @@ module.exports = async (req, res) => {
                     });
                     break;
                 case 'DELETE_EXPENSE':
-                    queuedOrders.push({ ActionType: 'DELETE_EXPENSE', Id: data.Id, CreatedBy: authorFormatted });
+                    queuedOrders.push({ ActionType: 'DELETE_EXPENSE', OrderId: uniqueOrderId, Id: data.Id, CreatedBy: authorFormatted });
                     break;
                 case 'PURCHASE':
                     queuedOrders.push({
                         ActionType: 'PURCHASE',
+                        OrderId: uniqueOrderId,
                         InvoiceNo: `PUR-${prefix}-${seq}`,
                         Date: dateStr,
                         Category: data.Category || "شراء بضاعة تجارية (تضاف للأرضية)",
@@ -648,6 +734,7 @@ module.exports = async (req, res) => {
                 case 'CRATE_RETURN':
                     queuedOrders.push({
                         ActionType: action_type,
+                        OrderId: uniqueOrderId,
                         Date: dateStr,
                         Customer: data.Customer,
                         Kind: action_type === 'CRATE_RETURN' ? 'استرجاع' : 'تسليم',
@@ -655,12 +742,14 @@ module.exports = async (req, res) => {
                         Qty: Number(data.Qty || 0),
                         Price: Number(data.Price || 70),
                         Amount: Number(data.Amount || (data.Qty * (data.Price || 70))),
+                        IsCashCollected: !!data.IsCashCollected,
                         CreatedBy: authorFormatted
                     });
                     break;
                 case 'WEIGHBRIDGE_TICKET':
                     queuedOrders.push({
                         ActionType: 'WEIGHBRIDGE_TICKET',
+                        OrderId: uniqueOrderId,
                         TicketNo: `WB-${prefix}-${seq}`,
                         Date: dateStr,
                         Vehicle: data.Vehicle,
@@ -675,10 +764,10 @@ module.exports = async (req, res) => {
             }
 
             await redis.set(queueKey, queuedOrders, { ex: 60 * 60 * 24 * 7 });
-            return sendJson(res, 200, { success: true, message: `تم تسجيل المعاملة بنجاح باسم [${authorFormatted}] وتمريرها للمزامنة الفورية.` });
+            return sendJson(res, 200, { success: true, message: `تم تسجيل المعاملة بنجاح وتوليد المعرف [${uniqueOrderId}] وتمريرها للمزامنة.` });
         }
 
-        // 13. بوابة الويب السحابية الملكية الشاملة لكافة الأقسام الـ 16 كاملة
+        // 13. بوابة الويب السحابية الشاملة لكافة الأقسام الـ 16
         if (pathname === '/app') {
             const key = String(query.key || '').trim();
             const data = key ? await redis.get(`agency:${key}`) : null;
@@ -714,7 +803,6 @@ module.exports = async (req, res) => {
             const checks = Array.isArray(data.checks) ? data.checks : [];
             const weighbridgeTickets = Array.isArray(data.weighbridge_tickets) ? data.weighbridge_tickets : [];
 
-            // دوال استخراج آمنة
             const getName = o => o.Name || o.name || o.FullName || o.fullName || '';
             const getSupplier = o => o.Supplier || o.supplier || '';
             const getPrice = o => Number(o.DefaultPrice || o.defaultPrice || o.Price || o.price || 0);
@@ -723,12 +811,21 @@ module.exports = async (req, res) => {
             const getDate = o => o.Date || o.date || '';
             const getItem = o => o.Item || o.item || '';
 
+            const currentOrigin = originOf(req);
+            const pairingConfigJson = JSON.stringify({
+                LocalUrl: currentOrigin,
+                CloudUrl: currentOrigin,
+                AgencyKey: key,
+                AgencyName: data.agency_name || "وكالة ميزان"
+            });
+            const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(pairingConfigJson)}`;
+
             return sendHtml(res, 200, `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(data.agency_name)} | منظومة ميزان السحابية الشاملة</title>
+<title>${esc(data.agency_name)} | منظومة ميزان السحابية</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Aref+Ruqaa:wght@700&display=swap');
 body { font-family: 'Cairo', -apple-system, Tahoma, sans-serif; background: #200308; margin: 0; padding: 12px; color: #FAF4F1; }
@@ -805,18 +902,21 @@ th { background: #5A0817; color: white; }
         </div>
     </div>
 
-    <!-- 2. الشاشة الرئيسية لجميع الأقسام والخدمات الـ 16 الشاملة -->
+    <!-- 2. الشاشة الرئيسية لجميع الأقسام والخدمات -->
     <div id="mainAppScreen">
         <div class="header">
             <h2>🏢 ${esc(data.agency_name)}</h2>
             <div style="font-size:11px; color:#C8B8B5; margin-top:4px;">اليومية: ${esc(data.logical_date)} | آخر مزامنة: ${new Date(data.last_sync).toLocaleTimeString('ar-EG', { timeZone: 'Africa/Cairo' })}</div>
             <div class="user-bar">
                 <span id="activeUserLabel">👤 الموظف: --</span>
-                <button class="logout-btn" onclick="handleLogout()">🚪 تسجيل الخروج</button>
+                <div>
+                    <button type="button" class="tab-btn" style="background:#D4AF37;color:#200308;padding:4px 10px;font-size:11px;margin-left:6px;" onclick="switchTab('tab-key', this)">🔑 كود الوكالة والاقتران</button>
+                    <button class="logout-btn" onclick="handleLogout()">🚪 خروج</button>
+                </div>
             </div>
         </div>
 
-        <!-- شريط الفلترة التاريخية الشامل -->
+        <!-- شريط الفلترة التاريخية -->
         <div class="date-bar">
             <label>📅 من:</label>
             <input type="date" id="filterFromDate" onchange="applyGlobalDateFilter()" />
@@ -827,7 +927,7 @@ th { background: #5A0817; color: white; }
             <button type="button" class="quick-btn" onclick="setDateRange('all')">عرض الكل</button>
         </div>
 
-        <!-- شريط التنقل لكافة أقسام المنظومة الـ 16 -->
+        <!-- شريط التنقل للأقسام -->
         <div class="nav-scroll">
             <button class="tab-btn active" onclick="switchTab('tab-dash', this)">📊 المؤشرات الحية</button>
             <button class="tab-btn" onclick="switchTab('tab-pos', this)">🛒 نقطة البيع (POS)</button>
@@ -843,7 +943,8 @@ th { background: #5A0817; color: white; }
             <button class="tab-btn" onclick="switchTab('tab-bank', this)">🏦 البنوك والشيكات</button>
             <button class="tab-btn" onclick="switchTab('tab-wb', this)">⚖️ ميزان بسكول</button>
             <button class="tab-btn" onclick="switchTab('tab-master', this)">👥 دليل الحسابات</button>
-            <button class="tab-btn" onclick="switchTab('tab-printer', this)">🖨️ إعدادات الطابعات والشبكة</button>
+            <button class="tab-btn" onclick="switchTab('tab-key', this)">🔑 كود الوكالة والاقتران</button>
+            <button class="tab-btn" onclick="switchTab('tab-printer', this)">🖨️ إعدادات الطابعات</button>
         </div>
 
         <!-- 1. المؤشرات الحية -->
@@ -863,6 +964,40 @@ th { background: #5A0817; color: white; }
             <div class="card">
                 <div>📦 برانيك متداولة بالسوق:</div>
                 <div class="val" style="color:#B45309;">${Number(m.crates_in_market || 0).toLocaleString()} برنيكة</div>
+            </div>
+        </div>
+
+        <!-- شاشة عرض كود الوكالة والاقتران الفوري بالـ QR -->
+        <div id="tab-key" class="tab-content">
+            <div class="form-card" style="text-align:center;">
+                <h3 style="margin-top:0;color:#5A0817;">🔑 كود ربط الوكالة السحابي واقتران الهواتف</h3>
+                <p style="color:#666;font-size:12.5px;">استخدم هذا الكود أو امسح الباركود بالكاميرا لربط أجهزة الكمبيوتر والهواتف بهذه الوكالة فوراً.</p>
+
+                <div style="background:#FFF;border:2px dashed #D4AF37;border-radius:12px;padding:15px;display:inline-block;margin:10px auto;">
+                    <img src="${esc(qrImageUrl)}" alt="QR Code" style="width:200px;height:200px;display:block;margin:auto;" />
+                    <div style="font-size:11px;color:#888;margin-top:6px;">امسح من كاميرا الهاتف أو برنامج الكمبيوتر</div>
+                </div>
+
+                <div style="max-width:380px;margin:auto;text-align:right;">
+                    <label>كود ربط الوكالة السري (Agency Sync Key):</label>
+                    <div style="display:flex;gap:6px;">
+                        <input type="text" id="dispKey" value="${esc(key)}" readonly style="text-align:center;font-weight:bold;font-family:Consolas;letter-spacing:1px;" />
+                        <button type="button" class="btn" style="width:auto;margin:4px 0 0 0;padding:8px 14px;" onclick="copyText('dispKey')">📋 نسخ</button>
+                    </div>
+
+                    <label style="margin-top:12px;">رابط السيرفر السحابي (Cloud Server URL):</label>
+                    <div style="display:flex;gap:6px;">
+                        <input type="text" id="dispUrl" value="${esc(currentOrigin)}" readonly style="text-align:center;font-family:Consolas;" />
+                        <button type="button" class="btn" style="width:auto;margin:4px 0 0 0;padding:8px 14px;" onclick="copyText('dispUrl')">📋 نسخ</button>
+                    </div>
+                </div>
+
+                <div style="background:#FDF4DF;border:1px solid #D4AF37;border-radius:8px;padding:10px;margin-top:16px;text-align:right;font-size:12px;line-height:1.8;">
+                    <b>💡 خطوات ربط برنامج الكمبيوتر:</b><br>
+                    1. افتح برنامج <b>ميزان</b> على الكمبيوتر ➔ <b>الإعدادات</b> ➔ <b>الربط والمزامنة السحابية</b>.<br>
+                    2. الصق <b>رابط السيرفر</b> في خانة (عنوان السيرفر السحابي).<br>
+                    3. الصق <b>كود الوكالة</b> في خانة (كود ربط الوكالة السري) واضغط حفظ ثم <b>(مزامنة فورية الآن)</b>.
+                </div>
             </div>
         </div>
 
@@ -922,7 +1057,7 @@ th { background: #5A0817; color: white; }
                         <div>الإجمالي المطلوب: <b id="posTotalTxt" style="font-size:18px;color:#5A0817;">0 ج</b></div>
                     </div>
 
-                    <button type="submit" class="submit-btn">💾 حفظ الفاتورة وتمريرها للسيرفر</button>
+                    <button type="submit" class="submit-btn">💾 حفظ الفاتورة وتمريرها للمزامنة</button>
                 </form>
             </div>
         </div>
@@ -954,11 +1089,10 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 4. ساحة توريد وتنزيل السيارات (سلة أصناف متعددة) -->
+        <!-- 4. ساحة توريد السيارات -->
         <div id="tab-load" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">🚚 توريد وتنزيل سيارة بالأرضية (سلة أصناف متعددة)</h3>
-                
+                <h3 style="margin-top:0;color:#5A0817;">🚚 توريد وتنزيل سيارة بالأرضية</h3>
                 <div class="grid-2">
                     <div>
                         <label>المورد / التاجر</label>
@@ -1004,7 +1138,7 @@ th { background: #5A0817; color: white; }
                     <button type="button" class="btn" style="background:#0D7857;margin-top:10px;" onclick="addItemToLoadCart()">➕ إضافة الصنف للسيارة</button>
                 </div>
 
-                <h4 style="margin:12px 0 4px 0;">الأصناف المحملة على هذه السيارة:</h4>
+                <h4 style="margin:12px 0 4px 0;">الأصناف المحملة:</h4>
                 <table id="loadItemsTable">
                     <thead><tr><th>الصنف</th><th>العدد</th><th>الوزن</th><th>حذف</th></tr></thead>
                     <tbody id="loadItemsTbody">
@@ -1012,14 +1146,14 @@ th { background: #5A0817; color: white; }
                     </tbody>
                 </table>
 
-                <button type="button" class="submit-btn" style="margin-top:16px;" onclick="submitFullVehicleLoad()">🚚 تثبيت وحفظ السيارة بالأرضية بالكامل</button>
+                <button type="button" class="submit-btn" style="margin-top:16px;" onclick="submitFullVehicleLoad()">🚚 تثبيت وحفظ السيارة بالأرضية</button>
             </div>
         </div>
 
-        <!-- 5. تصفية سيارات الأمانة والتوالف -->
+        <!-- 5. تصفية سيارات الأمانة -->
         <div id="tab-settle" class="tab-content">
             <div class="form-card">
-                <h3 style="margin-top:0;color:#5A0817;">🚛 تصفية وإقفال سيارة أمانة وحساب الفلاح</h3>
+                <h3 style="margin-top:0;color:#5A0817;">🚛 تصفية وإقفال سيارة أمانة</h3>
                 <label>اختر السيارة للتصفية</label>
                 <select id="settleLoadSelect" onchange="updateSettlePreview()">
                     <option value="">-- اختر السيارة --</option>
@@ -1033,7 +1167,7 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 6. جرد بضاعة الأرضية اللحظي -->
+        <!-- 6. جرد بضاعة الأرضية -->
         <div id="tab-stock" class="tab-content">
             <h3>🚚 بضاعة الأرضية والسيارات المفتوحة (${esc(floorStock.length)})</h3>
             <table>
@@ -1073,7 +1207,7 @@ th { background: #5A0817; color: white; }
                 </form>
             </div>
 
-            <h3>سندات التحصيل السابقة</h3>
+            <h3>سندات التحصيل المسجلة</h3>
             <table>
                 <thead>
                     <tr><th>رقم السند</th><th>التاريخ</th><th>العميل</th><th>المبلغ</th><th>طريقة الدفع</th><th>إجراء</th></tr>
@@ -1151,7 +1285,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 10. فواتير المشتريات والأصول -->
+        <!-- 10. فواتير المشتريات -->
         <div id="tab-pur" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">📥 تسجيل فاتورة شراء بضاعة وأصول</h3>
@@ -1193,7 +1327,7 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 11. حركة وتأمين الصناديق والبرانيك -->
+        <!-- 11. حركة الصناديق والبرانيك -->
         <div id="tab-crate" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">📦 حركة وتأمين الصناديق والبرانيك</h3>
@@ -1217,14 +1351,18 @@ th { background: #5A0817; color: white; }
                             <input type="number" name="Price" value="70" />
                         </div>
                     </div>
+                    <label>
+                        <input type="checkbox" name="IsCashCollected" style="width:auto;margin-left:6px;" checked />
+                        تسوية رهن التأمين نقداً بالدرج
+                    </label>
                     <button type="submit" class="submit-btn">📦 تثبيت حركة الصناديق</button>
                 </form>
             </div>
         </div>
 
-        <!-- 12. البنوك والشيكات ومراكز التكلفة -->
+        <!-- 12. البنوك والشيكات -->
         <div id="tab-bank" class="tab-content">
-            <h3>🏦 الحسابات البنكية والشيكات</h3>
+            <h3>🏦 الحسابات البنكية الجارية</h3>
             <table>
                 <tr><th>البنك / الحساب</th><th>رقم الحساب</th><th>الرصيد</th></tr>
                 ${bankAccounts.map(b => `
@@ -1269,7 +1407,7 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 14. دليل الحسابات (Master Data) -->
+        <!-- 14. دليل الحسابات -->
         <div id="tab-master" class="tab-content">
             <h3>👥 العملاء والموردين (${customers.length} عميل / ${suppliers.length} مورد)</h3>
             <table>
@@ -1279,7 +1417,7 @@ th { background: #5A0817; color: white; }
             </table>
         </div>
 
-        <!-- 15. إعدادات الطابعات والشبكة والطباعة من الهاتف -->
+        <!-- 15. إعدادات الطابعات والشبكة -->
         <div id="tab-printer" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">🖨️ إعدادات الطابعات والشبكة (Mobile &amp; Thermal Printing)</h3>
@@ -1294,8 +1432,8 @@ th { background: #5A0817; color: white; }
                 <label>عنوان IP طابعة الشبكة الحرارية (Network Thermal IP / اختياري)</label>
                 <input type="text" id="netPrinterIp" placeholder="مثال: 192.168.1.200:9100" onchange="savePrinterPrefs()" />
 
-                <label>
-                    <input type="checkbox" id="chkAutoPrintWeb" onchange="savePrinterPrefs()" checked />
+                <label style="margin-top:12px;">
+                    <input type="checkbox" id="chkAutoPrintWeb" onchange="savePrinterPrefs()" style="width:auto;margin-left:6px;" checked />
                     تشغيل نافذة الطباعة تلقائياً فور حفظ الفاتورة على الهاتف
                 </label>
 
@@ -1304,8 +1442,8 @@ th { background: #5A0817; color: white; }
         </div>
     </div>
 
-    <!-- مساحة الطباعة المخفية المجهزة للفواتير -->
-    <div id="printArea"></div>
+    <!-- مساحة الطباعة المخفية -->
+    <div id="printArea" style="display:none;"></div>
 
     <script>
     const AGENCY_KEY = "${esc(key)}";
@@ -1323,6 +1461,15 @@ th { background: #5A0817; color: white; }
         }
     }
     syncScreenState();
+
+    function copyText(elemId) {
+        const el = document.getElementById(elemId);
+        if (!el) return;
+        el.select();
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(el.value).then(() => alert('تم النسخ للحافظة بنجاح!'));
+        }
+    }
 
     function syncSelectedUserText() {
         const sel = document.getElementById('loginUserSelect');
@@ -1368,8 +1515,9 @@ th { background: #5A0817; color: white; }
     function switchTab(tabId, btn) {
         document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
         document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-        document.getElementById(tabId).classList.add('active');
-        btn.classList.add('active');
+        const target = document.getElementById(tabId);
+        if (target) target.classList.add('active');
+        if (btn) btn.classList.add('active');
     }
 
     function setDateRange(type) {
@@ -1440,14 +1588,14 @@ th { background: #5A0817; color: white; }
             tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">لم يتم إضافة أصناف للسيارة بعد</td></tr>';
             return;
         }
-        tbody.innerHTML = vehicleCargoItems.map((it, idx) => \`
+        tbody.innerHTML = vehicleCargoItems.map((it, idx) => `
             <tr>
-                <td><b>\${it.Item}</b></td>
-                <td>\${it.QtyIn} ق</td>
-                <td>\${it.WeightIn} ك</td>
-                <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;" onclick="removeLoadItem(\${idx})">✕</button></td>
+                <td><b>${esc(it.Item)}</b></td>
+                <td>${it.QtyIn} ق</td>
+                <td>${it.WeightIn} ك</td>
+                <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:2px 8px;cursor:pointer;" onclick="removeLoadItem(${idx})">✕</button></td>
             </tr>
-        \`).join('');
+        `).join('');
     }
 
     async function submitFullVehicleLoad() {
@@ -1513,17 +1661,19 @@ th { background: #5A0817; color: white; }
 
     function printInvoiceReceipt(inv) {
         const area = document.getElementById('printArea');
-        area.innerHTML = \`
+        area.style.display = 'block';
+        area.innerHTML = `
             <div style="font-family:Tahoma,sans-serif;width:280px;margin:auto;text-align:right;font-size:12px;padding:10px;">
-                <h3 style="text-align:center;margin:0 0 5px 0;">\${inv.agencyName}</h3>
-                <div style="text-align:center;font-size:11px;border-bottom:1px dashed #000;padding-bottom:5px;">فاتورة مبيعات #\${inv.invoiceNo}</div>
-                <div style="margin:6px 0;">العميل: \${inv.customer}</div>
-                <div style="margin:6px 0;">الصنف: \${inv.item} (\${inv.qty}ق / \${inv.weight}ك @ \${inv.price}ج)</div>
-                <div style="font-weight:bold;font-size:14px;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:5px 0;">الإجمالي: \${inv.total.toLocaleString()} جنيه</div>
+                <h3 style="text-align:center;margin:0 0 5px 0;">${esc(inv.agencyName)}</h3>
+                <div style="text-align:center;font-size:11px;border-bottom:1px dashed #000;padding-bottom:5px;">فاتورة مبيعات #${esc(inv.invoiceNo)}</div>
+                <div style="margin:6px 0;">العميل: ${esc(inv.customer)}</div>
+                <div style="margin:6px 0;">الصنف: ${esc(inv.item)} (${inv.qty}ق / ${inv.weight}ك @ ${inv.price}ج)</div>
+                <div style="font-weight:bold;font-size:14px;border-top:1px dashed #000;border-bottom:1px dashed #000;padding:5px 0;">الإجمالي: ${inv.total.toLocaleString()} جنيه</div>
                 <div style="text-align:center;margin-top:10px;font-size:10px;">منظومة ميزان السحابية</div>
             </div>
-        \`;
+        `;
         window.print();
+        setTimeout(() => { area.style.display = 'none'; }, 1000);
     }
 
     async function sendAction(action_type, data) {
@@ -1664,7 +1814,8 @@ th { background: #5A0817; color: white; }
         const data = {
             Customer: f.Customer.value,
             Qty: parseFloat(f.Qty.value) || 0,
-            Price: parseFloat(f.Price.value) || 70
+            Price: parseFloat(f.Price.value) || 70,
+            IsCashCollected: !!f.IsCashCollected?.checked
         };
         const ok = await sendAction(f.Kind.value === 'استرجاع' ? 'CRATE_RETURN' : 'CRATE_DELIVERY', data);
         if (ok) f.reset();
