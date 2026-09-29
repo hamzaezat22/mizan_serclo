@@ -1,20 +1,18 @@
 const { Redis } = require('@upstash/redis');
 const crypto = require('crypto');
 
-// تخزين دائم على Upstash Redis
 const redis = new Redis({
     url: process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL,
     token: process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN
 });
 
-// ---------- أدوات مساعدة ----------
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const versionInfo = {
     latest_version: "2.1.0",
     download_url: "https://example.com/downloads/Mizan_Agency_Update.exe",
-    changelog: "شاشة تسجيل دخول إلزامية وتأمين خروج الجلسات"
+    changelog: "معالجة احتساب الأرباح اللحظية وتمييز مستخدمي السيرفر"
 };
 
 const sendJson = (res, status, obj) => {
@@ -33,7 +31,7 @@ async function readJson(req) {
     let s = '';
     for await (const chunk of req) {
         s += chunk;
-        if (s.length > 10_000_000) throw new Error('حجم البيانات كبير جداً');
+        if (s.length > 15_000_000) throw new Error('حجم البيانات كبير جداً');
     }
     return JSON.parse(s || '{}');
 }
@@ -41,7 +39,6 @@ async function readJson(req) {
 const hashPassword = (password, salt) => new Promise((resolve, reject) =>
     crypto.scrypt(password, salt, 64, (e, k) => (e ? reject(e) : resolve(k.toString('hex')))));
 
-// التحقق من كلمات مرور مستخدمي الديسكتوب المتزامنة (PBKDF2 SHA-256)
 function verifyDesktopPassword(password, storedHash) {
     if (!storedHash || !password) return false;
     if (!storedHash.includes(':')) {
@@ -58,7 +55,7 @@ function verifyDesktopPassword(password, storedHash) {
     }
 }
 
-async function rateLimit(req, name, limit = 20, windowSec = 900) {
+async function rateLimit(req, name, limit = 25, windowSec = 900) {
     const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown';
     const k = `rl:${name}:${ip}`;
     const n = await redis.incr(k);
@@ -167,9 +164,6 @@ button, .btn { width: 100%; box-sizing: border-box; background: #5A0817; color: 
 button:hover, .btn:hover { background: #7A0B20; }
 .small { background: #2A040B; color: #D4AF37; padding: 8px; font-size: 13px; margin-top: 6px; }
 .msg { color: #ff8a8a; font-size: 13.5px; margin-top: 10px; min-height: 18px; text-align: center; font-weight: bold; }
-input[type=radio], input[type=checkbox] { width: auto; margin: 0 0 0 6px; }
-.radio { display: inline-block; margin: 8px 0 0 14px; color: #FAF4F1; font-size: 14px; }
-.note { font-size: 12px; color: #C8B8B5; margin-top: 12px; line-height: 1.7; }
 `;
 
 const shell = (title, body, script = '') => `<!DOCTYPE html>
@@ -477,7 +471,7 @@ module.exports = async (req, res) => {
         }
 
         // 9. مزامنة البيانات الكاملة من كمبيوتر الوكالة (Push from Desktop)
-        if (pathname === '/api/sync/push' && req.method === 'POST') {
+        if ((pathname === '/api/sync/push' || pathname === '/api/sync') && req.method === 'POST') {
             let body = await readJson(req);
             const agency_key = String(body.agency_key || body.key || body.apiKey || req.headers['x-api-key'] || query.key || '').trim();
 
@@ -526,7 +520,7 @@ module.exports = async (req, res) => {
                 overdue_customers: body.overdue_customers || []
             }, { ex: 60 * 60 * 24 * 30 });
 
-            return sendJson(res, 200, { success: true, message: `تم استقبال مزامنة الوكالة بنجاح (${payloadUsers.length} مستخدم).` });
+            return sendJson(res, 200, { success: true, message: `تم استقبال مزامنة الوكالة بنجاح (${(body.items || []).length} صنف و ${(body.customers || []).length} عميل).` });
         }
 
         // 10. سحب العمليات المنشأة سحابياً إلى كمبيوتر الوكالة (Pull to Desktop)
@@ -562,7 +556,7 @@ module.exports = async (req, res) => {
             const cleanUser = username.toLowerCase();
             const syncedUsers = data && Array.isArray(data.users) ? data.users : [];
 
-            // 1. البحث في المستخدمين المتزامنين من الديسكتوب
+            // 1. فحص مستخدمي الوكالة المتزامنين من الديسكتوب
             const matchedUser = syncedUsers.find(u => {
                 const uName = String(u.Username || u.username || '').toLowerCase();
                 const fName = String(u.FullName || u.fullName || u.full_name || '').toLowerCase();
@@ -588,7 +582,7 @@ module.exports = async (req, res) => {
                 });
             }
 
-            // 2. إذا لم يزامن المستخدمين بعد، نسمح بحساب المالك الرئيسي للسيرفر كـ Fallback
+            // 2. حساب المالك الرئيسي كـ Fallback
             if (ownerUser && (ownerUser.username.toLowerCase() === cleanUser || cleanUser === 'admin')) {
                 const salt = ownerUser.salt;
                 const hash = await hashPassword(password, salt);
@@ -617,7 +611,7 @@ module.exports = async (req, res) => {
             return sendJson(res, 401, { success: false, message: "اسم المستخدم أو كلمة المرور غير صحيحة." });
         }
 
-        // 12. إنشاء وتوجيه كافة أنواع العمليات المحاسبية من السيرفر السحابي
+        // 12. إنشاء وتوجيه كافة العمليات المحاسبية من السيرفر السحابي
         if (pathname === '/api/web/create-action' && req.method === 'POST') {
             let b = await readJson(req);
             const { agency_key, action_type, user_name, data, source } = b;
@@ -647,6 +641,7 @@ module.exports = async (req, res) => {
                             Customer: data.Customer || "عميل نقدي",
                             Item: it.Item,
                             Supplier: it.Supplier || "عام",
+                            LoadKey: it.LoadKey || data.LoadKey || "",
                             Salesman: data.Salesman || "عام",
                             Grade: it.Grade || "فرز أول ممتاز",
                             CrateType: it.CrateType || "برنيكة بلاستيك",
@@ -753,7 +748,7 @@ module.exports = async (req, res) => {
             });
         }
 
-        // 13. بوابة الويب السحابية الشاملة مع شاشة تسجيل دخول مسبقة مطابقة للديسكتوب
+        // 13. بوابة الويب السحابية الشاملة لكافة الأقسام والخدمات مع دعم حقول الديسكتوب المتزامنة
         if (pathname === '/app') {
             const key = String(query.key || '').trim();
             const data = key ? await redis.get(`agency:${key}`) : null;
@@ -774,21 +769,38 @@ module.exports = async (req, res) => {
             }
 
             const m = data.metrics || {};
-            const customers = data.customers || [];
-            const suppliers = data.suppliers || [];
-            const items = data.items || [];
-            const loads = data.loads || [];
-            const users = data.users || [];
+            const customers = Array.isArray(data.customers) ? data.customers : [];
+            const suppliers = Array.isArray(data.suppliers) ? data.suppliers : [];
+            const items = Array.isArray(data.items) ? data.items : [];
+            const loads = Array.isArray(data.loads) ? data.loads : [];
+            const users = Array.isArray(data.users) ? data.users : [];
+            const floorStock = Array.isArray(data.floor_stock) ? data.floor_stock : [];
+            const recentSales = Array.isArray(data.recent_sales) ? data.recent_sales : [];
+            const collections = Array.isArray(data.collections) ? data.collections : [];
+            const expenses = Array.isArray(data.expenses) ? data.expenses : [];
+            const crates = Array.isArray(data.crates) ? data.crates : [];
+            const purchases = Array.isArray(data.purchases) ? data.purchases : [];
+            const bankAccounts = Array.isArray(data.bank_accounts) ? data.bank_accounts : [];
+            const checks = Array.isArray(data.checks) ? data.checks : [];
+            const weighbridgeTickets = Array.isArray(data.weighbridge_tickets) ? data.weighbridge_tickets : [];
+
+            // دوال استخراج القيم الآمنة لتفادي حساسية الأحرف
+            const getName = o => o.Name || o.name || o.FullName || o.fullName || '';
+            const getSupplier = o => o.Supplier || o.supplier || '';
+            const getPrice = o => Number(o.DefaultPrice || o.defaultPrice || o.Price || o.price || 0);
+            const getBalance = o => Number(o.Balance || o.balance || 0);
+            const getVehicle = o => o.Vehicle || o.vehicle || '';
+            const getDate = o => o.Date || o.date || '';
+            const getItem = o => o.Item || o.item || '';
 
             return sendHtml(res, 200, `<!DOCTYPE html>
 <html dir="rtl" lang="ar">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(data.agency_name)} | منظومة ميزان السحابية</title>
+<title>${esc(data.agency_name)} | المنظومة السحابية الشاملة</title>
 <style>
 body { font-family: -apple-system, Tahoma, 'Cairo', sans-serif; background: #200308; margin: 0; padding: 12px; color: #FAF4F1; }
-/* شاشة تسجيل الدخول المسبقة (مثل LoginWindow بالديسكتوب) */
 #loginScreen { display: flex; justify-content: center; align-items: center; min-height: 90vh; }
 .login-box { background: #2A040B; border: 1.8px solid #D4AF37; border-radius: 16px; max-width: 420px; width: 100%; padding: 28px; text-align: right; box-shadow: 0 15px 40px rgba(0,0,0,0.6); }
 .login-header { text-align: center; margin-bottom: 20px; }
@@ -796,7 +808,6 @@ body { font-family: -apple-system, Tahoma, 'Cairo', sans-serif; background: #200
 .login-header p { margin: 0; color: #C8B8B5; font-size: 13px; }
 .badge { background: #5A0817; color: #FAF4F1; padding: 6px 10px; border-radius: 6px; font-weight: bold; font-size: 12.5px; text-align: center; margin-bottom: 15px; border: 1px solid #D4AF37; }
 
-/* الحاوية الرئيسية للمنظومة (تظهر فقط بعد تسجيل الدخول) */
 #mainAppScreen { display: none; background: #FAF4F1; border-radius: 12px; padding: 12px; color: #1E1E1E; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
 .header { background: #2A040B; color: #FFF; padding: 16px; border-radius: 12px; text-align: center; border-bottom: 3px solid #D4AF37; margin-bottom: 12px; }
 .header h2 { margin: 0; color: #D4AF37; font-size: 20px; }
@@ -825,7 +836,7 @@ th { background: #5A0817; color: white; }
 </head>
 <body>
 
-    <!-- 1. شاشة تسجيل الدخول المسبقة (مثل الديسكتوب تماماً) -->
+    <!-- 1. شاشة تسجيل الدخول المسبقة للموظفين -->
     <div id="loginScreen">
         <div class="login-box">
             <div class="login-header">
@@ -839,7 +850,7 @@ th { background: #5A0817; color: white; }
                 <label style="color:#D4AF37;">اختر المستخدم / الموظف</label>
                 ${users && users.length > 0 ? `
                 <select id="loginUserSelect" onchange="syncSelectedUserText()" required style="background:#FAF4F1;">
-                    ${users.map(u => `<option value="${esc(u.Username || u.username)}">${esc(u.FullName || u.fullName || u.Username)} (${esc(u.JobTitle || u.Role || 'محاسب')})</option>`).join('')}
+                    ${users.map(u => `<option value="${esc(u.Username || u.username)}">${esc(u.FullName || u.fullName || u.Username)} (${esc(u.JobTitle || u.job_title || u.Role || 'محاسب')})</option>`).join('')}
                 </select>
                 <input type="hidden" id="loginUserInput" value="${esc(users[0].Username || users[0].username)}" />
                 ` : `
@@ -855,7 +866,7 @@ th { background: #5A0817; color: white; }
         </div>
     </div>
 
-    <!-- 2. شاشة المنظومة الشاملة بعد تسجيل الدخول -->
+    <!-- 2. الشاشة الرئيسية لجميع الأقسام والخدمات -->
     <div id="mainAppScreen">
         <div class="header">
             <h2>🏢 ${esc(data.agency_name)}</h2>
@@ -866,17 +877,20 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- شريط تصفح الأقسام والخدمات الـ 10 الشاملة -->
+        <!-- شريط التبويبات لكافة خدمات الديسكتوب -->
         <div class="nav-scroll">
             <button class="tab-btn active" onclick="switchTab('tab-dash', this)">📊 المؤشرات الحية</button>
             <button class="tab-btn" onclick="switchTab('tab-pos', this)">🛒 نقطة البيع (POS)</button>
+            <button class="tab-btn" onclick="switchTab('tab-sales-reg', this)">📋 سجل المبيعات</button>
             <button class="tab-btn" onclick="switchTab('tab-load', this)">🚚 تنزيل سيارة</button>
-            <button class="tab-btn" onclick="switchTab('tab-col', this)">🧾 سند تحصيل</button>
-            <button class="tab-btn" onclick="switchTab('tab-exp', this)">💸 تسجيل مصروف</button>
-            <button class="tab-btn" onclick="switchTab('tab-pur', this)">📥 فاتورة مشتريات</button>
-            <button class="tab-btn" onclick="switchTab('tab-crate', this)">📦 حركة الصناديق</button>
-            <button class="tab-btn" onclick="switchTab('tab-wb', this)">⚖️ ميزان بسكول</button>
             <button class="tab-btn" onclick="switchTab('tab-stock', this)">🚛 جرد الأرضية</button>
+            <button class="tab-btn" onclick="switchTab('tab-col', this)">🧾 سندات التحصيل</button>
+            <button class="tab-btn" onclick="switchTab('tab-pending', this)">📄 الفواتير الآجلة</button>
+            <button class="tab-btn" onclick="switchTab('tab-exp', this)">💸 الخزينة والمصروفات</button>
+            <button class="tab-btn" onclick="switchTab('tab-pur', this)">📥 فواتير المشتريات</button>
+            <button class="tab-btn" onclick="switchTab('tab-crate', this)">📦 حركة الصناديق</button>
+            <button class="tab-btn" onclick="switchTab('tab-bank', this)">🏦 البنوك والشيكات</button>
+            <button class="tab-btn" onclick="switchTab('tab-wb', this)">⚖️ ميزان بسكول</button>
             <button class="tab-btn" onclick="switchTab('tab-master', this)">👥 دليل الحسابات</button>
         </div>
 
@@ -908,19 +922,19 @@ th { background: #5A0817; color: white; }
                     <label>العميل / المشتري</label>
                     <select name="Customer" id="posCustSelect" onchange="updateCustDebtHint()" required>
                         <option value="عميل نقدي">عميل نقدي</option>
-                        ${customers.map(c => `<option value="${esc(c.Name)}" data-debt="${c.Balance || 0}">${esc(c.Name)} (مديونية: ${Number(c.Balance || 0).toLocaleString()} ج)</option>`).join('')}
+                        ${customers.map(c => `<option value="${esc(getName(c))}" data-debt="${getBalance(c)}">${esc(getName(c))} (مديونية: ${getBalance(c).toLocaleString()} ج)</option>`).join('')}
                     </select>
                     <div id="custDebtHint" style="font-size:11.5px;color:#B45309;margin-top:3px;font-weight:bold;"></div>
 
                     <label>سيارة المورد / الحمولة</label>
                     <select name="LoadKey" id="posLoadSelect">
-                        <option value="">مبيعات مباشرة (بدون سيارة)</option>
-                        ${loads.map(l => `<option value="${esc(l.Supplier)} | ${esc(l.Vehicle)} | ${esc(l.Date)}">${esc(l.Supplier)} | ${esc(l.Vehicle)} (${esc(l.Item)})</option>`).join('')}
+                        <option value="" data-supplier="">مبيعات مباشرة (بدون سيارة)</option>
+                        ${loads.map(l => `<option value="${esc(getSupplier(l))} | ${esc(getVehicle(l))} | ${esc(getDate(l))}" data-supplier="${esc(getSupplier(l))}">${esc(getSupplier(l))} | ${esc(getVehicle(l))} (${esc(getItem(l))})</option>`).join('')}
                     </select>
 
                     <label>الصنف</label>
                     <select name="Item" id="posItemSelect" required>
-                        ${items.map(i => `<option value="${esc(i.Name)}" data-price="${i.DefaultPrice || 0}">${esc(i.Name)} - [${esc(i.Supplier)}]</option>`).join('')}
+                        ${items.map(i => `<option value="${esc(getName(i))}" data-supplier="${esc(getSupplier(i))}" data-price="${getPrice(i)}">${esc(getName(i))} - [${esc(getSupplier(i))}]</option>`).join('')}
                     </select>
 
                     <div class="grid-2">
@@ -962,20 +976,39 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 3. تنزيل سيارة -->
+        <!-- 3. سجل المبيعات -->
+        <div id="tab-sales-reg" class="tab-content">
+            <h3>📋 سجل فواتير المبيعات</h3>
+            <table>
+                <tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الصنف</th><th>الوزن</th><th>الإجمالي</th><th>المدفوع</th></tr>
+                ${recentSales.map(s => `
+                    <tr>
+                        <td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td>
+                        <td>${esc(s.Date || s.date)}</td>
+                        <td>${esc(s.Customer || s.customer)}</td>
+                        <td>${esc(s.Item || s.item)}</td>
+                        <td>${Number(s.Weight || s.weight || 0).toLocaleString()} ك</td>
+                        <td>${Number(s.Value || s.value || 0).toLocaleString()} ج</td>
+                        <td>${Number(s.PaidAmount || s.paidAmount || 0).toLocaleString()} ج</td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+
+        <!-- 4. تنزيل سيارة -->
         <div id="tab-load" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">🚚 توريد وتنزيل سيارة بالأرضية</h3>
                 <form onsubmit="handleLoadSubmit(event)">
                     <label>المورد / التاجر</label>
                     <select name="Supplier" required>
-                        ${suppliers.map(s => `<option value="${esc(s.Name)}">${esc(s.Name)}</option>`).join('')}
+                        ${suppliers.map(s => `<option value="${esc(getName(s))}">${esc(getName(s))}</option>`).join('')}
                     </select>
                     <label>رقم / بيان السيارة</label>
                     <input type="text" name="Vehicle" placeholder="مثال: 5412 نقل" required />
                     <label>الصنف</label>
                     <select name="Item" required>
-                        ${items.map(i => `<option value="${esc(i.Name)}">${esc(i.Name)}</option>`).join('')}
+                        ${items.map(i => `<option value="${esc(getName(i))}">${esc(getName(i))}</option>`).join('')}
                     </select>
                     <div class="grid-2">
                         <div>
@@ -1002,14 +1035,31 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 4. سند تحصيل -->
+        <!-- 5. جرد الأرضية -->
+        <div id="tab-stock" class="tab-content">
+            <h3>🚚 بضاعة الأرضية والسيارات المفتوحة (${esc(floorStock.length)})</h3>
+            <table>
+                <tr><th>الصنف</th><th>السيارة</th><th>المورد</th><th>باقي عدد</th><th>باقي وزن</th></tr>
+                ${floorStock.map(f => `
+                    <tr>
+                        <td><b>${esc(f.Item || f.item)}</b></td>
+                        <td>${esc(f.Vehicle || f.vehicle)}</td>
+                        <td>${esc(f.Supplier || f.supplier)}</td>
+                        <td>${Number(f.QtyRemaining || f.qtyRemaining || 0).toLocaleString()} ق</td>
+                        <td>${Number(f.WeightRemaining || f.weightRemaining || 0).toLocaleString()} ك</td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+
+        <!-- 6. سندات التحصيل -->
         <div id="tab-col" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">🧾 تسجيل سند قبض وتحصيل</h3>
                 <form onsubmit="handleColSubmit(event)">
                     <label>العميل</label>
                     <select name="Customer" required>
-                        ${customers.map(c => `<option value="${esc(c.Name)}">${esc(c.Name)} (مديونية: ${Number(c.Balance || 0).toLocaleString()} ج)</option>`).join('')}
+                        ${customers.map(c => `<option value="${esc(getName(c))}">${esc(getName(c))} (مديونية: ${getBalance(c).toLocaleString()} ج)</option>`).join('')}
                     </select>
                     <label>المبلغ المحصل (جنيه)</label>
                     <input type="number" name="Amount" step="1" required />
@@ -1024,9 +1074,40 @@ th { background: #5A0817; color: white; }
                     <button type="submit" class="submit-btn">🧾 حفظ وتأكيد سند القبض</button>
                 </form>
             </div>
+
+            <h3>سندات التحصيل السابقة</h3>
+            <table>
+                <tr><th>رقم السند</th><th>التاريخ</th><th>العميل</th><th>المبلغ</th><th>طريقة الدفع</th></tr>
+                ${collections.map(c => `
+                    <tr>
+                        <td><b>${esc(c.ReceiptNo || c.receiptNo)}</b></td>
+                        <td>${esc(c.Date || c.date)}</td>
+                        <td>${esc(c.Customer || c.customer)}</td>
+                        <td>${Number(c.Amount || c.amount || 0).toLocaleString()} ج</td>
+                        <td>${esc(c.PaymentMethod || c.paymentMethod)}</td>
+                    </tr>
+                `).join('')}
+            </table>
         </div>
 
-        <!-- 5. تسجيل مصروف -->
+        <!-- 7. الفواتير الآجلة -->
+        <div id="tab-pending" class="tab-content">
+            <h3>📄 كشف الفواتير الآجلة غير المسددة بالكامل</h3>
+            <table>
+                <tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الإجمالي</th><th>المتبقي الآجل</th></tr>
+                ${recentSales.filter(s => (s.RemainingAmount || s.remainingAmount) > 0).map(s => `
+                    <tr>
+                        <td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td>
+                        <td>${esc(s.Date || s.date)}</td>
+                        <td>${esc(s.Customer || s.customer)}</td>
+                        <td>${Number(s.Value || s.value || 0).toLocaleString()} ج</td>
+                        <td style="color:#DC2626;font-weight:bold;">${Number(s.RemainingAmount || s.remainingAmount || 0).toLocaleString()} ج</td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+
+        <!-- 8. الخزينة والمصروفات -->
         <div id="tab-exp" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">💸 صرف وتسجيل مصروف</h3>
@@ -1046,9 +1127,22 @@ th { background: #5A0817; color: white; }
                     <button type="submit" class="submit-btn">💸 خصم وصرف المصروف</button>
                 </form>
             </div>
+
+            <h3>المصروفات المسجلة</h3>
+            <table>
+                <tr><th>التاريخ</th><th>البند</th><th>البيان</th><th>المبلغ</th></tr>
+                ${expenses.map(e => `
+                    <tr>
+                        <td>${esc(e.Date || e.date)}</td>
+                        <td>${esc(e.Category || e.category)}</td>
+                        <td>${esc(e.Description || e.description)}</td>
+                        <td>${Number(e.Amount || e.amount || 0).toLocaleString()} ج</td>
+                    </tr>
+                `).join('')}
+            </table>
         </div>
 
-        <!-- 6. فاتورة مشتريات -->
+        <!-- 9. فواتير المشتريات -->
         <div id="tab-pur" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">📥 تسجيل فاتورة شراء بضاعة وأصول</h3>
@@ -1061,7 +1155,7 @@ th { background: #5A0817; color: white; }
                     </select>
                     <label>المورد / الجهة</label>
                     <select name="Supplier" required>
-                        ${suppliers.map(s => `<option value="${esc(s.Name)}">${esc(s.Name)}</option>`).join('')}
+                        ${suppliers.map(s => `<option value="${esc(getName(s))}">${esc(getName(s))}</option>`).join('')}
                     </select>
                     <label>الصنف / البيان</label>
                     <input type="text" name="Item" required />
@@ -1090,14 +1184,14 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 7. حركة الصناديق -->
+        <!-- 10. حركة الصناديق -->
         <div id="tab-crate" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">📦 حركة وتأمين الصناديق والبرانيك</h3>
                 <form onsubmit="handleCrateSubmit(event)">
                     <label>العميل</label>
                     <select name="Customer" required>
-                        ${customers.map(c => `<option value="${esc(c.Name)}">${esc(c.Name)}</option>`).join('')}
+                        ${customers.map(c => `<option value="${esc(getName(c))}">${esc(getName(c))}</option>`).join('')}
                     </select>
                     <label>نوع الحركة</label>
                     <select name="Kind">
@@ -1119,7 +1213,22 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 8. ميزان بسكول -->
+        <!-- 11. البنوك والشيكات -->
+        <div id="tab-bank" class="tab-content">
+            <h3>🏦 الحسابات البنكية والشيكات</h3>
+            <table>
+                <tr><th>البنك / الحساب</th><th>رقم الحساب</th><th>الرصيد</th></tr>
+                ${bankAccounts.map(b => `
+                    <tr>
+                        <td><b>${esc(b.BankName || b.bankName)}</b> (${esc(b.AccountName || b.accountName)})</td>
+                        <td>${esc(b.AccountNumber || b.accountNumber)}</td>
+                        <td>${Number(b.Balance || b.balance || 0).toLocaleString()} ج</td>
+                    </tr>
+                `).join('')}
+            </table>
+        </div>
+
+        <!-- 12. ميزان بسكول -->
         <div id="tab-wb" class="tab-content">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">⚖️ تسجيل كارتة ميزان بسكول</h3>
@@ -1130,11 +1239,11 @@ th { background: #5A0817; color: white; }
                     <input type="text" name="DriverName" value="سائق حر" />
                     <label>المورد</label>
                     <select name="Supplier" required>
-                        ${suppliers.map(s => `<option value="${esc(s.Name)}">${esc(s.Name)}</option>`).join('')}
+                        ${suppliers.map(s => `<option value="${esc(getName(s))}">${esc(getName(s))}</option>`).join('')}
                     </select>
                     <label>الصنف</label>
                     <select name="Item" required>
-                        ${items.map(i => `<option value="${esc(i.Name)}">${esc(i.Name)}</option>`).join('')}
+                        ${items.map(i => `<option value="${esc(getName(i))}">${esc(getName(i))}</option>`).join('')}
                     </select>
                     <div class="grid-2">
                         <div>
@@ -1151,29 +1260,13 @@ th { background: #5A0817; color: white; }
             </div>
         </div>
 
-        <!-- 9. جرد الأرضية -->
-        <div id="tab-stock" class="tab-content">
-            <h3>🚚 بضاعة الأرضية اللحظية</h3>
-            <table>
-                <tr><th>الصنف</th><th>السيارة</th><th>باقي عدد</th><th>باقي وزن</th></tr>
-                ${(data.floor_stock || []).map(f => `
-                    <tr>
-                        <td><b>${esc(f.Item)}</b></td>
-                        <td>${esc(f.Vehicle)}</td>
-                        <td>${esc(f.QtyRemaining)} ق</td>
-                        <td>${esc(f.WeightRemaining)} ك</td>
-                    </tr>
-                `).join('')}
-            </table>
-        </div>
-
-        <!-- 10. دليل الحسابات -->
+        <!-- 13. دليل الحسابات -->
         <div id="tab-master" class="tab-content">
-            <h3>👥 العملاء والموردين</h3>
+            <h3>👥 العملاء والموردين (${customers.length} عميل / ${suppliers.length} مورد)</h3>
             <table>
                 <tr><th>الاسم</th><th>الصفة</th><th>المديونية / الرصيد</th></tr>
-                ${customers.map(c => `<tr><td>${esc(c.Name)}</td><td>عميل</td><td>${Number(c.Balance || 0).toLocaleString()} ج</td></tr>`).join('')}
-                ${suppliers.map(s => `<tr><td>${esc(s.Name)}</td><td>مورد</td><td>عمولة: ${esc(s.DefaultCommission || 0)}%</td></tr>`).join('')}
+                ${customers.map(c => `<tr><td>${esc(getName(c))}</td><td>عميل</td><td>${getBalance(c).toLocaleString()} ج</td></tr>`).join('')}
+                ${suppliers.map(s => `<tr><td>${esc(getName(s))}</td><td>مورد</td><td>عمولة: ${esc(s.DefaultCommission || s.defaultCommission || 0)}%</td></tr>`).join('')}
             </table>
         </div>
     </div>
@@ -1307,6 +1400,10 @@ th { background: #5A0817; color: white; }
         const val = Math.max(0, (base * p) - d);
         const isCash = f.PaymentMethod.value.includes('نقدي') || f.Customer.value === 'عميل نقدي';
 
+        const itemSelect = document.getElementById('posItemSelect');
+        const selectedItemOpt = itemSelect.options[itemSelect.selectedIndex];
+        const supplierName = selectedItemOpt.getAttribute('data-supplier') || 'عام';
+
         const data = {
             Customer: f.Customer.value,
             LoadKey: f.LoadKey.value,
@@ -1315,6 +1412,8 @@ th { background: #5A0817; color: white; }
             RemainingAmount: isCash ? 0 : val,
             Items: [{
                 Item: f.Item.value,
+                Supplier: supplierName,
+                LoadKey: f.LoadKey.value,
                 Qty: q,
                 Weight: w,
                 Price: p,
