@@ -12,7 +12,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
 const versionInfo = {
     latest_version: "2.1.0",
     download_url: "https://example.com/downloads/Mizan_Agency_Update.exe",
-    changelog: "فلتر التاريخ اللحظي وإدارة وتعديل وحذف كافة الحركات السحابية"
+    changelog: "المنظومة السحابية المتطابقة 100% مع تطبيق الديسكتوب"
 };
 
 const sendJson = (res, status, obj) => {
@@ -31,7 +31,7 @@ async function readJson(req) {
     let s = '';
     for await (const chunk of req) {
         s += chunk;
-        if (s.length > 15_000_000) throw new Error('حجم البيانات كبير جداً');
+        if (s.length > 20_000_000) throw new Error('حجم البيانات كبير جداً');
     }
     return JSON.parse(s || '{}');
 }
@@ -55,7 +55,7 @@ function verifyDesktopPassword(password, storedHash) {
     }
 }
 
-async function rateLimit(req, name, limit = 25, windowSec = 900) {
+async function rateLimit(req, name, limit = 30, windowSec = 900) {
     const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown';
     const k = `rl:${name}:${ip}`;
     const n = await redis.incr(k);
@@ -440,7 +440,7 @@ module.exports = async (req, res) => {
             });
         }
 
-        // مزامنة البيانات الكاملة من الديسكتوب
+        // استقبال ومزامنة كامل جداول المنظومة من الديسكتوب
         if ((pathname === '/api/sync/push' || pathname === '/api/sync') && req.method === 'POST') {
             let body = await readJson(req);
             const agency_key = String(body.agency_key || body.key || body.apiKey || req.headers['x-api-key'] || query.key || '').trim();
@@ -471,13 +471,18 @@ module.exports = async (req, res) => {
                 loads: body.loads || [],
                 recent_sales: body.recent_sales || [],
                 collections: body.collections || [],
-                expenses: body.expenses || []
+                expenses: body.expenses || [],
+                purchases: body.purchases || [],
+                crates: body.crates || [],
+                bank_accounts: body.bank_accounts || [],
+                checks: body.checks || [],
+                weighbridge_tickets: body.weighbridge_tickets || []
             }, { ex: 60 * 60 * 24 * 30 });
 
             return sendJson(res, 200, { success: true, message: "تم استقبال كامل جداول الوكالة بالسيرفر السحابي بنجاح." });
         }
 
-        // سحب العمليات المنشأة سحابياً إلى الديسكتوب
+        // سحب العمليات المنشأة سحابياً إلى الديسكتوب (كل 3 ثوانٍ)
         if (pathname === '/api/mobile/orders' && req.method === 'GET') {
             const agency_key = String(query.key || req.headers['x-api-key'] || '').trim();
             if (!agency_key) return sendJson(res, 400, { success: false, message: "كود الوكالة مطلوب." });
@@ -573,7 +578,7 @@ module.exports = async (req, res) => {
                             Weight: Number(it.Weight || 0),
                             Price: Number(it.Price || 0),
                             Discount: Number(it.Discount || 0),
-                            Value: Number(it.Value || 0),
+                            Value: Number(it.Value || (it.Weight > 0 ? it.Weight * it.Price : it.Qty * it.Price)),
                             PaidAmount: Number(idx === 0 ? (data.PaidAmount || 0) : 0),
                             RemainingAmount: Number(idx === 0 ? (data.RemainingAmount || 0) : 0),
                             PaymentMethod: data.PaymentMethod || "نقدي (كاش)",
@@ -583,18 +588,10 @@ module.exports = async (req, res) => {
                     break;
                 }
                 case 'DELETE_INVOICE':
-                    queuedOrders.push({
-                        ActionType: 'DELETE_INVOICE',
-                        InvoiceNo: data.InvoiceNo,
-                        CreatedBy: authorFormatted
-                    });
+                    queuedOrders.push({ ActionType: 'DELETE_INVOICE', InvoiceNo: data.InvoiceNo, CreatedBy: authorFormatted });
                     break;
                 case 'LOAD_SUPPLY': {
-                    const items = Array.isArray(data.Items) ? data.Items : [{
-                        Item: data.Item,
-                        QtyIn: Number(data.QtyIn || 0),
-                        WeightIn: Number(data.WeightIn || 0)
-                    }];
+                    const items = Array.isArray(data.Items) ? data.Items : [{ Item: data.Item, QtyIn: Number(data.QtyIn || 0), WeightIn: Number(data.WeightIn || 0) }];
                     queuedOrders.push({
                         ActionType: 'LOAD_SUPPLY',
                         Date: dateStr,
@@ -622,11 +619,7 @@ module.exports = async (req, res) => {
                     });
                     break;
                 case 'DELETE_COLLECTION':
-                    queuedOrders.push({
-                        ActionType: 'DELETE_COLLECTION',
-                        ReceiptNo: data.ReceiptNo,
-                        CreatedBy: authorFormatted
-                    });
+                    queuedOrders.push({ ActionType: 'DELETE_COLLECTION', ReceiptNo: data.ReceiptNo, CreatedBy: authorFormatted });
                     break;
                 case 'EXPENSE':
                     queuedOrders.push({
@@ -640,11 +633,7 @@ module.exports = async (req, res) => {
                     });
                     break;
                 case 'DELETE_EXPENSE':
-                    queuedOrders.push({
-                        ActionType: 'DELETE_EXPENSE',
-                        Id: data.Id,
-                        CreatedBy: authorFormatted
-                    });
+                    queuedOrders.push({ ActionType: 'DELETE_EXPENSE', Id: data.Id, CreatedBy: authorFormatted });
                     break;
                 case 'PURCHASE':
                     queuedOrders.push({
@@ -667,10 +656,10 @@ module.exports = async (req, res) => {
             }
 
             await redis.set(queueKey, queuedOrders, { ex: 60 * 60 * 24 * 7 });
-            return sendJson(res, 200, { success: true, message: `تم تسجيل المعاملة بنجاح باسم [${authorFormatted}] وتمريرها للمزامنة.` });
+            return sendJson(res, 200, { success: true, message: `تم تسجيل المعاملة بنجاح باسم [${authorFormatted}] وتمريرها للمزامنة الفورية.` });
         }
 
-        // بوابة الويب السحابية الملكية الشاملة مع شريط فلتر التاريخ والعمليات التفاعلية
+        // بوابة الويب السحابية الشاملة لكافة الأقسام والخدمات مع شريط فلتر التاريخ والعمليات
         if (pathname === '/app') {
             const key = String(query.key || '').trim();
             const data = key ? await redis.get(`agency:${key}`) : null;
@@ -700,7 +689,12 @@ module.exports = async (req, res) => {
             const recentSales = Array.isArray(data.recent_sales) ? data.recent_sales : [];
             const collections = Array.isArray(data.collections) ? data.collections : [];
             const expenses = Array.isArray(data.expenses) ? data.expenses : [];
+            const purchases = Array.isArray(data.purchases) ? data.purchases : [];
+            const bankAccounts = Array.isArray(data.bank_accounts) ? data.bank_accounts : [];
+            const checks = Array.isArray(data.checks) ? data.checks : [];
+            const weighbridgeTickets = Array.isArray(data.weighbridge_tickets) ? data.weighbridge_tickets : [];
 
+            // دوال استخراج آمنة
             const getName = o => o.Name || o.name || o.FullName || o.fullName || '';
             const getSupplier = o => o.Supplier || o.supplier || '';
             const getPrice = o => Number(o.DefaultPrice || o.defaultPrice || o.Price || o.price || 0);
@@ -716,21 +710,20 @@ module.exports = async (req, res) => {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${esc(data.agency_name)} | المنظومة السحابية الشاملة</title>
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Aref+Ruqaa:wght@700&display=swap');
 body { font-family: 'Cairo', -apple-system, Tahoma, sans-serif; background: #200308; margin: 0; padding: 12px; color: #FAF4F1; }
 #loginScreen { display: flex; justify-content: center; align-items: center; min-height: 90vh; }
 .login-box { background: #2A040B; border: 1.8px solid #D4AF37; border-radius: 16px; max-width: 430px; width: 100%; padding: 28px; text-align: right; box-shadow: 0 15px 40px rgba(0,0,0,0.6); }
 .login-header { text-align: center; margin-bottom: 20px; }
-.login-header h2 { margin: 0 0 6px 0; color: #D4AF37; font-size: 24px; }
+.login-header h2 { margin: 0 0 6px 0; color: #D4AF37; font-size: 24px; font-family: 'Aref Ruqaa', 'Cairo', serif; }
 .login-header p { margin: 0; color: #C8B8B5; font-size: 13px; }
 .badge { background: #5A0817; color: #FAF4F1; padding: 6px 10px; border-radius: 6px; font-weight: bold; font-size: 12.5px; text-align: center; margin-bottom: 15px; border: 1px solid #D4AF37; }
 
 #mainAppScreen { display: none; background: #FAF4F1; border-radius: 12px; padding: 12px; color: #1E1E1E; box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
 .header { background: #2A040B; color: #FFF; padding: 16px; border-radius: 12px; text-align: center; border-bottom: 3px solid #D4AF37; margin-bottom: 10px; }
-.header h2 { margin: 0; color: #D4AF37; font-size: 22px; }
+.header h2 { margin: 0; color: #D4AF37; font-size: 22px; font-family: 'Aref Ruqaa', 'Cairo', serif; }
 .user-bar { background: #38050E; color: #D4AF37; padding: 8px 12px; border-radius: 8px; margin-top: 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
 
-/* شريط فلترة التاريخ الشامل */
 .date-bar { background: #FFF; border: 1px solid #D4AF37; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; box-shadow: 0 2px 6px rgba(0,0,0,0.05); }
 .date-bar label { margin: 0; font-size: 12px; font-weight: bold; color: #5A0817; }
 .date-bar input[type=date] { width: 135px; padding: 6px 8px; margin: 0; font-size: 12px; border: 1px solid #C8B8B5; }
@@ -962,6 +955,7 @@ th { background: #5A0817; color: white; }
                     </div>
                 </div>
 
+                <!-- سلة إضافة الأصناف للسيارة -->
                 <div style="background:#F9FAFB;border:1px solid #D4AF37;border-radius:8px;padding:10px;margin-top:12px;">
                     <h4 style="margin:0 0 8px 0;color:#5A0817;">📦 إضافة صنف لحمولة السيارة:</h4>
                     <div class="grid-2">
@@ -983,6 +977,7 @@ th { background: #5A0817; color: white; }
                     <button type="button" class="btn" style="background:#0D7857;margin-top:10px;" onclick="addItemToLoadCart()">➕ إضافة الصنف للسيارة</button>
                 </div>
 
+                <!-- جدول محتويات حمولة السيارة -->
                 <h4 style="margin:12px 0 4px 0;">الأصناف المحملة على هذه السيارة:</h4>
                 <table id="loadItemsTable">
                     <thead><tr><th>الصنف</th><th>العدد</th><th>الوزن</th><th>حذف</th></tr></thead>
