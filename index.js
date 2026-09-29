@@ -9,83 +9,113 @@ const versionInfo = {
 };
 
 module.exports = (req, res) => {
+    // إعدادات CORS
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (req.method === 'OPTIONS') {
-        return res.status(200).end();
+        res.statusCode = 200;
+        return res.end();
     }
 
-    const url = req.url || '/';
+    // استخراج المسار والمعاملات
+    const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const pathname = parsedUrl.pathname;
+    const query = Object.fromEntries(parsedUrl.searchParams);
 
     // 1. الصفحة الرئيسية
-    if (url === '/' || url === '') {
+    if (pathname === '/' || pathname === '') {
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        return res.status(200).send(`
-            <div style="font-family: Tahoma, sans-serif; text-align: center; padding: 50px; background: #200308; color: #FAF4F1; min-height: 100vh;">
-                <h1 style="color: #0D7857;">🚀 خادم ميزان السحابي يعمل بنجاح 100%!</h1>
-                <p style="font-size: 16px; color: #D4AF37;">الخادم جاهز لاستقبال بيانات الوكالات وفحص التحديثات على مدار 24 ساعة.</p>
-                <div style="margin-top: 30px;">
-                    <a href="/app" style="background: #5A0817; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; font-weight: bold; border: 1px solid #D4AF37;">📱 فتح بوابة الموبايل للوكالات</a>
+        res.statusCode = 200;
+        return res.end(`
+            <!DOCTYPE html>
+            <html dir="rtl" lang="ar">
+            <head>
+                <meta charset="UTF-8">
+                <title>خادم ميزان السحابي</title>
+                <style>
+                    body { font-family: Tahoma, sans-serif; text-align: center; padding: 50px; background: #200308; color: #FAF4F1; }
+                    .card { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 12px; max-width: 500px; margin: auto; padding: 30px; }
+                    a { background: #5A0817; color: white; padding: 12px 25px; text-decoration: none; border-radius: 8px; font-weight: bold; border: 1px solid #D4AF37; display: inline-block; margin-top: 20px; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h1 style="color: #0D7857;">🚀 خادم ميزان السحابي يعمل بنجاح 100%!</h1>
+                    <p style="color: #D4AF37;">الخادم جاهز لاستقبال بيانات الوكالات وفحص التحديثات على مدار 24 ساعة.</p>
+                    <a href="/app">📱 فتح بوابة الموبايل للوكالات</a>
                 </div>
-            </div>
+            </body>
+            </html>
         `);
     }
 
-    // 2. فحص التحديثات
-    if (url.startsWith('/api/system/check-update')) {
-        const clientVer = (req.query && req.query.version) || "1.0.0";
+    // 2. مسار فحص التحديثات
+    if (pathname === '/api/system/check-update') {
+        const clientVer = query.version || "1.0.0";
         const hasUpdate = clientVer !== versionInfo.latest_version;
 
         res.setHeader('Content-Type', 'application/json; charset=utf-8');
-        return res.status(200).json({
+        res.statusCode = 200;
+        return res.end(JSON.stringify({
             success: true,
             has_update: hasUpdate,
             client_version: clientVer,
             latest_version: versionInfo.latest_version,
             download_url: versionInfo.download_url,
-            message: hasUpdate ? "الرجاء تنزيل التحديث الجديد للعمل بكفاءة أعلى." : "أنت تعمل على أحدث إصدار معتمد.",
+            message: hasUpdate ? "الرجاء تنزيل التحديث الجديد للعمل بكفاءة أعلى ومزامنة سحابية فائقة السرعة." : "أنت تعمل على أحدث إصدار معتمد.",
             changelog: versionInfo.changelog
+        }));
+    }
+
+    // 3. مسار مزامنة ورفع البيانات من كمبيوتر الوكالة
+    if (pathname === '/api/sync/push' && req.method === 'POST') {
+        let bodyStr = '';
+        req.on('data', chunk => { bodyStr += chunk; });
+        req.on('end', () => {
+            try {
+                const body = JSON.parse(bodyStr || '{}');
+                const { agency_key, agency_name, drawer_cash, today_sales, net_profit, open_cars_count, floor_stock, recent_sales } = body;
+
+                if (!agency_key) {
+                    res.statusCode = 400;
+                    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                    return res.end(JSON.stringify({ success: false, message: "كود الوكالة مطلوب." }));
+                }
+
+                agencyStores[agency_key] = {
+                    agency_name: agency_name || "وكالة ميزان",
+                    last_sync: new Date().toISOString(),
+                    metrics: {
+                        drawer_cash: drawer_cash || 0,
+                        today_sales: today_sales || 0,
+                        net_profit: net_profit || 0,
+                        open_cars_count: open_cars_count || 0
+                    },
+                    floor_stock: floor_stock || [],
+                    recent_sales: recent_sales || []
+                };
+
+                res.statusCode = 200;
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
+                return res.end(JSON.stringify({ success: true, message: "تمت المزامنة بنجاح في السيرفر السحابي." }));
+            } catch (err) {
+                res.statusCode = 500;
+                return res.end(JSON.stringify({ error: err.message }));
+            }
         });
+        return;
     }
 
-    // 3. رفع المزامنة من الكمبيوتر
-    if (url.startsWith('/api/sync/push')) {
-        if (req.method !== 'POST') {
-            return res.status(405).json({ success: false, message: "Method Not Allowed" });
-        }
-
-        const body = req.body || {};
-        const { agency_key, agency_name, drawer_cash, today_sales, net_profit, open_cars_count, floor_stock, recent_sales } = body;
-
-        if (!agency_key) {
-            return res.status(400).json({ success: false, message: "كود الوكالة مطلوب." });
-        }
-
-        agencyStores[agency_key] = {
-            agency_name: agency_name || "وكالة ميزان",
-            last_sync: new Date().toISOString(),
-            metrics: {
-                drawer_cash: drawer_cash || 0,
-                today_sales: today_sales || 0,
-                net_profit: net_profit || 0,
-                open_cars_count: open_cars_count || 0
-            },
-            floor_stock: floor_stock || [],
-            recent_sales: recent_sales || []
-        };
-
-        return res.status(200).json({ success: true, message: "تمت المزامنة بنجاح في السيرفر السحابي." });
-    }
-
-    // 4. بوابة الموبايل
-    if (url.startsWith('/app')) {
+    // 4. بوابة الموبايل للعميل
+    if (pathname === '/app') {
+        const key = query.key;
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        const key = req.query && req.query.key;
+        res.statusCode = 200;
 
         if (!key || !agencyStores[key]) {
-            return res.status(200).send(`
+            return res.end(`
             <!DOCTYPE html>
             <html dir="rtl" lang="ar">
             <head>
@@ -94,7 +124,7 @@ module.exports = (req, res) => {
                 <title>بوابة الوكالة السحابية | ميزان</title>
                 <style>
                     body { font-family: -apple-system, Tahoma, sans-serif; background: #200308; color: #FAF4F1; padding: 25px; text-align: center; }
-                    .box { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 12px; max-width: 400px; margin: 50px auto; padding: 25px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+                    .box { background: #2A040B; border: 1.5px solid #D4AF37; border-radius: 12px; max-width: 400px; margin: 50px auto; padding: 25px; }
                     input { width: 100%; box-sizing: border-box; padding: 12px; margin: 15px 0; border-radius: 8px; border: 1px solid #D4AF37; font-size: 16px; text-align: center; font-weight: bold; background: #FAF4F1; color: #1E1E1E; }
                     button { width: 100%; background: #5A0817; color: white; border: 1px solid #D4AF37; padding: 12px; border-radius: 8px; font-weight: bold; font-size: 16px; cursor: pointer; }
                 </style>
@@ -114,7 +144,7 @@ module.exports = (req, res) => {
         }
 
         const data = agencyStores[key];
-        return res.status(200).send(`
+        return res.end(`
         <!DOCTYPE html>
         <html dir="rtl" lang="ar">
         <head>
@@ -173,5 +203,6 @@ module.exports = (req, res) => {
         `);
     }
 
-    return res.status(404).send("Page not found");
+    res.statusCode = 404;
+    res.end("Not Found");
 };
