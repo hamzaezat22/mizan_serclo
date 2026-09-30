@@ -10,6 +10,84 @@ const redis = new Redis({
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+
+// ===== جلسات الويب الموقّعة + صلاحيات + مساعدات =====
+const SESSION_SECRET = process.env.SESSION_SECRET || process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN || 'mizan-local-secret';
+const b64u = v => Buffer.from(v).toString('base64url');
+const PRIV_RE = /(admin|owner|manager|مدير|صاحب|مالك)/i;
+const isPrivileged = (role, title) => PRIV_RE.test(`${role || ''} ${title || ''}`);
+function signSession(payload) {
+    const body = b64u(JSON.stringify(payload));
+    const sig = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+    return `${body}.${sig}`;
+}
+function verifySession(token, agencyKey) {
+    try {
+        const [body, sig] = String(token || '').split('.');
+        if (!body || !sig) return null;
+        const good = crypto.createHmac('sha256', SESSION_SECRET).update(body).digest('base64url');
+        const a = Buffer.from(sig), c = Buffer.from(good);
+        if (a.length !== c.length || !crypto.timingSafeEqual(a, c)) return null;
+        const p = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+        if (!p || p.k !== agencyKey || !p.exp || p.exp < Date.now()) return null;
+        return p;
+    } catch { return null; }
+}
+const makeToken = (agencyKey, u) => signSession({
+    k: agencyKey, u: u.username, n: u.full_name, r: u.role,
+    p: isPrivileged(u.role, u.job_title), exp: Date.now() + 1000 * 60 * 60 * 24 * 30
+});
+const cairoToday = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
+const numOr0 = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const PRIV_ACTIONS = new Set(['DELETE_INVOICE', 'DELETE_COLLECTION', 'DELETE_EXPENSE', 'EDIT_INVOICE', 'SETTLE_VEHICLE', 'ADD_CUSTOMER', 'ADD_SUPPLIER']);
+
+function saleLines(invNo, dateStr, data, items, orderId, author, extra) {
+    return items.map((it, idx) => Object.assign({
+        ActionType: 'SALE_INVOICE',
+        OrderId: orderId,
+        InvoiceNo: invNo,
+        Date: dateStr,
+        Customer: data.Customer || 'عميل نقدي',
+        Item: it.Item,
+        Supplier: it.Supplier || 'عام',
+        LoadKey: it.LoadKey || data.LoadKey || '',
+        Salesman: data.Salesman || 'عام',
+        Grade: it.Grade || 'فرز أول ممتاز',
+        CrateType: it.CrateType || 'برنيكة بلاستيك',
+        Qty: numOr0(it.Qty),
+        Weight: numOr0(it.Weight),
+        Price: numOr0(it.Price),
+        Discount: numOr0(it.Discount),
+        Value: numOr0(it.Value),
+        PaidAmount: idx === 0 ? numOr0(data.PaidAmount) : 0,
+        RemainingAmount: idx === 0 ? numOr0(data.RemainingAmount) : 0,
+        PaymentMethod: data.PaymentMethod || 'نقدي (كاش)',
+        CreatedBy: author
+    }, extra || {}));
+}
+
+function summarizeAction(t, d) {
+    const n = v => numOr0(v).toLocaleString('en-US');
+    switch (t) {
+        case 'SALE_INVOICE': return `فاتورة بيع للعميل ${d.Customer || ''} بقيمة ${n((d.Items || []).reduce((a, i) => a + numOr0(i.Value), 0))} ج`;
+        case 'EDIT_INVOICE': return `تعديل الفاتورة ${d.InvoiceNo || ''} (العميل ${d.Customer || ''})`;
+        case 'DELETE_INVOICE': return `حذف الفاتورة ${d.InvoiceNo || ''}`;
+        case 'COLLECTION': return `سند تحصيل من ${d.Customer || ''} بمبلغ ${n(d.Amount)} ج`;
+        case 'DELETE_COLLECTION': return `حذف سند التحصيل ${d.ReceiptNo || ''}`;
+        case 'EXPENSE': return `مصروف ${d.Category || ''} بمبلغ ${n(d.Amount)} ج`;
+        case 'DELETE_EXPENSE': return `حذف مصروف رقم ${d.Id || ''}`;
+        case 'PURCHASE': return `فاتورة مشتريات من ${d.Supplier || ''} بقيمة ${n(d.Value)} ج`;
+        case 'LOAD_SUPPLY': return `توريد سيارة ${d.Vehicle || ''} للمورد ${d.Supplier || ''}`;
+        case 'SETTLE_VEHICLE': return `تصفية سيارة ${d.Vehicle || ''} للمورد ${d.Supplier || ''} - صافي المورد ${n(d.NetDue)} ج`;
+        case 'ADD_CUSTOMER': return `إضافة عميل ${d.Name || ''}`;
+        case 'ADD_SUPPLIER': return `إضافة مورد ${d.Name || ''}`;
+        case 'CRATE_DELIVERY': return `تسليم برانيك إلى ${d.Customer || ''} (${n(d.Qty)})`;
+        case 'CRATE_RETURN': return `استرجاع برانيك من ${d.Customer || ''} (${n(d.Qty)})`;
+        case 'WEIGHBRIDGE_TICKET': return `كارتة ميزان للسيارة ${d.Vehicle || ''}`;
+        default: return t;
+    }
+}
+
 const versionInfo = {
     latest_version: "2.1.0",
     download_url: "https://example.com/downloads/Mizan_Agency_Update.exe",
@@ -611,24 +689,28 @@ th { background: #5A0817; color: white; }
                 if (!verifyDesktopPassword(password, passHash)) {
                     return sendJson(res, 401, { success: false, message: "كلمة المرور غير صحيحة." });
                 }
+                const mu = {
+                    id: matchedUser.Id || matchedUser.id || 1,
+                    username: matchedUser.Username || matchedUser.username,
+                    full_name: matchedUser.FullName || matchedUser.fullName || matchedUser.full_name,
+                    role: matchedUser.Role || matchedUser.role || 'محاسب',
+                    job_title: matchedUser.JobTitle || matchedUser.job_title || 'محاسب'
+                };
                 return sendJson(res, 200, {
                     success: true,
-                    user: {
-                        id: matchedUser.Id || matchedUser.id || 1,
-                        username: matchedUser.Username || matchedUser.username,
-                        full_name: matchedUser.FullName || matchedUser.fullName || matchedUser.full_name,
-                        role: matchedUser.Role || matchedUser.role || 'محاسب',
-                        job_title: matchedUser.JobTitle || matchedUser.job_title || 'محاسب'
-                    }
+                    token: makeToken(agency_key, mu),
+                    user: Object.assign({}, mu, { privileged: isPrivileged(mu.role, mu.job_title) })
                 });
             }
 
             if (ownerUser && (ownerUser.username.toLowerCase() === cleanUser || cleanUser === 'admin')) {
                 const hash = await hashPassword(password, ownerUser.salt);
                 if (hash === ownerUser.password_hash) {
+                    const ou = { id: 1, username: ownerUser.username, full_name: `${ownerUser.agency_name} (المدير العام)`, role: 'admin', job_title: 'مدير عام' };
                     return sendJson(res, 200, {
                         success: true,
-                        user: { id: 1, username: ownerUser.username, full_name: `${ownerUser.agency_name} (المدير العام)`, role: 'admin', job_title: 'مدير عام' }
+                        token: makeToken(agency_key, ou),
+                        user: Object.assign({}, ou, { privileged: true })
                     });
                 }
             }
@@ -643,11 +725,17 @@ th { background: #5A0817; color: white; }
             if (!agency_key || !action_type || !data) return sendJson(res, 400, { success: false, message: "بيانات ناقصة." });
             if (!(await gateAgency(agency_key)).ok) return payRequired(res, agency_key);
 
+            const session = verifySession(b.token, agency_key);
+            if (PRIV_ACTIONS.has(action_type) && !(session && session.p)) {
+                return sendJson(res, 403, { success: false, message: 'ليس لديك صلاحية لتنفيذ هذه العملية. سجّل الدخول بحساب مدير.' });
+            }
+            const actor = session ? session.n : user_name;
+
             const queueKey = `orders_queue:${agency_key}`;
-            const queuedOrders = await redis.get(queueKey) || [];
+            const queuedOrders = [];
 
             const dateStr = data.Date || new Date().toISOString().slice(0, 10);
-            const authorFormatted = `${user_name || "مستخدم"} (${source === 'mobile' ? 'مستخدم الهاتف' : 'مستخدم السيرفر'})`;
+            const authorFormatted = `${actor || "مستخدم"} (${source === 'mobile' ? 'مستخدم الهاتف' : 'مستخدم السيرفر'})`;
             const prefix = source === 'mobile' ? 'MOB' : 'SRV';
             const seq = Math.floor(1000 + Math.random() * 9000);
             const uniqueOrderId = `ORD-${Date.now()}-${seq}`;
@@ -783,10 +871,82 @@ th { background: #5A0817; color: white; }
                         CreatedBy: authorFormatted
                     });
                     break;
+                case 'EDIT_INVOICE': {
+                    const invNo = String(data.InvoiceNo || '').trim();
+                    const items = Array.isArray(data.Items) ? data.Items.filter(i => i && i.Item) : [];
+                    if (!invNo || !items.length) return sendJson(res, 400, { success: false, message: 'بيانات الفاتورة المعدلة ناقصة.' });
+                    // حذف الفاتورة القديمة ثم إعادتها بنفس الرقم في نفس الدفعة، فلا تتكرر الأرقام
+                    queuedOrders.push({ ActionType: 'DELETE_INVOICE', OrderId: `${uniqueOrderId}-D`, InvoiceNo: invNo, IsEdit: true, CreatedBy: authorFormatted });
+                    saleLines(invNo, dateStr, data, items, `${uniqueOrderId}-A`, authorFormatted, { IsEdit: true, EditOf: invNo }).forEach(o => queuedOrders.push(o));
+                    break;
+                }
+                case 'SETTLE_VEHICLE': {
+                    if (!data.Supplier || !data.Vehicle) return sendJson(res, 400, { success: false, message: 'بيانات السيارة ناقصة.' });
+                    queuedOrders.push({
+                        ActionType: 'SETTLE_VEHICLE',
+                        OrderId: uniqueOrderId,
+                        Date: dateStr,
+                        LoadKey: data.LoadKey || '',
+                        Supplier: data.Supplier,
+                        Vehicle: data.Vehicle,
+                        TotalSales: numOr0(data.TotalSales),
+                        CommissionRate: numOr0(data.CommissionRate),
+                        CommissionType: data.CommissionType || 'percent',
+                        CommissionAmount: numOr0(data.CommissionAmount),
+                        Freight: numOr0(data.Freight),
+                        Damage: numOr0(data.Damage),
+                        NetDue: numOr0(data.NetDue),
+                        Notes: data.Notes || '',
+                        CreatedBy: authorFormatted
+                    });
+                    break;
+                }
+                case 'ADD_CUSTOMER':
+                case 'ADD_SUPPLIER': {
+                    const nm = String(data.Name || '').trim();
+                    if (!nm) return sendJson(res, 400, { success: false, message: 'الاسم مطلوب.' });
+                    queuedOrders.push({
+                        ActionType: action_type,
+                        OrderId: uniqueOrderId,
+                        Name: nm,
+                        Phone: String(data.Phone || '').trim(),
+                        DefaultCommission: action_type === 'ADD_SUPPLIER' ? numOr0(data.DefaultCommission || 5) : undefined,
+                        CreditLimit: action_type === 'ADD_CUSTOMER' ? numOr0(data.CreditLimit) : undefined,
+                        CreatedBy: authorFormatted
+                    });
+                    break;
+                }
+                default:
+                    return sendJson(res, 400, { success: false, message: 'نوع العملية غير معروف.' });
             }
 
-            await redis.set(queueKey, queuedOrders, { ex: 60 * 60 * 24 * 7 });
+            // منع التكرار: نفس client_id لا يُنفّذ مرتين (ضغط مزدوج / إعادة إرسال بعد انقطاع)
+            if (b.client_id) {
+                const fresh = await redis.set(`idem:${agency_key}:${String(b.client_id).slice(0, 64)}`, 1, { nx: true, ex: 60 * 60 * 24 });
+                if (!fresh) return sendJson(res, 200, { success: true, duplicate: true, message: 'تم استلام هذه العملية من قبل ولم تتكرر.' });
+            }
+
+            const pending = (await redis.get(queueKey)) || [];
+            await redis.set(queueKey, pending.concat(queuedOrders), { ex: 60 * 60 * 24 * 7 });
+
+            try {
+                const logKey = `activity:${agency_key}`;
+                await redis.lpush(logKey, { ts: new Date().toISOString(), user: actor || 'مستخدم', type: action_type, summary: summarizeAction(action_type, data), order: uniqueOrderId });
+                await redis.ltrim(logKey, 0, 299);
+                await redis.expire(logKey, 60 * 60 * 24 * 90);
+            } catch (e) { console.error('activity log failed', e); }
+
             return sendJson(res, 200, { success: true, message: `تم تسجيل المعاملة بنجاح وتوليد المعرف [${uniqueOrderId}] وتمريرها للمزامنة.` });
+        }
+
+        // سجل النشاط (للمدير فقط)
+        if (pathname === '/api/web/activity' && req.method === 'GET') {
+            const agency_key = String(query.key || '').trim();
+            const session = verifySession(req.headers['x-session-token'], agency_key);
+            if (!session || !session.p) return sendJson(res, 403, { success: false, message: 'غير مصرح.' });
+            if (!(await gateAgency(agency_key)).ok) return payRequired(res, agency_key);
+            const list = (await redis.lrange(`activity:${agency_key}`, 0, 199)) || [];
+            return sendJson(res, 200, { success: true, items: list.map(x => { if (typeof x !== 'string') return x; try { return JSON.parse(x); } catch { return { ts: '', user: '', summary: x }; } }) });
         }
 
         // 13. بوابة الويب السحابية الشاملة لكافة الأقسام الـ 16
@@ -859,13 +1019,96 @@ th { background: #5A0817; color: white; }
             const syncAgeText = syncAgeMin < 1 ? 'الآن' : syncAgeMin < 60 ? `منذ ${syncAgeMin} دقيقة` : syncAgeMin < 1440 ? `منذ ${Math.round(syncAgeMin / 60)} ساعة` : `منذ ${Math.round(syncAgeMin / 1440)} يوم`;
             const syncStale = syncAgeMin > 1440;
             const syncLine = `<div class="sync-note${syncStale ? ' stale' : ''}">🔄 آخر بيانات مستلمة من الكمبيوتر: ${syncAgeText}${syncStale ? ' — افتح برنامج ميزان واضغط «مزامنة فورية»' : ''} <a href="javascript:location.reload()" style="color:inherit;margin-right:8px;">تحديث الصفحة</a></div>`;
+
+            const todayC = cairoToday();
+            const dayDiff = d => Math.floor((new Date(todayC + 'T00:00:00Z') - new Date(String(d).slice(0, 10) + 'T00:00:00Z')) / 86400000);
+            const pick = (o, ...ks) => { for (const k of ks) { if (o[k] != null && o[k] !== '') return o[k]; } return ''; };
+            const jsonS = o => JSON.stringify(o).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+
+            const DONE_RE = /(محصل|مصروف|تم|مسدد|paid|cleared|collected)/i;
+            const checkInfo = c => {
+                const due = String(pick(c, 'DueDate', 'dueDate', 'due_date')).slice(0, 10);
+                const st = String(pick(c, 'Status', 'status'));
+                if (!due || DONE_RE.test(st)) return null;
+                const diff = dayDiff(due);
+                if (diff > 0) return { lvl: 'red', text: `متأخر ${diff} يوم` };
+                if (diff >= -3) return { lvl: 'amber', text: diff === 0 ? 'يستحق اليوم' : `يستحق خلال ${-diff} يوم` };
+                return null;
+            };
+            const checksTable = arr => {
+                if (!arr.length) return '<div class="empty">لا توجد شيكات.</div>';
+                const cols = Object.keys(arr[0]).filter(k => typeof arr[0][k] !== 'object').slice(0, 7);
+                return `<div class="tbl-wrap"><table><thead><tr>${cols.map(c => `<th>${esc(colName(c))}</th>`).join('')}<th>التنبيه</th></tr></thead><tbody>` +
+                    arr.slice(0, 300).map(o => { const ci = checkInfo(o); return `<tr>${cols.map(c => `<td>${typeof o[c] === 'number' ? o[c].toLocaleString() : esc(o[c] == null ? '' : String(o[c]))}</td>`).join('')}<td>${ci ? `<span class="bdg ${ci.lvl}">${esc(ci.text)}</span>` : ''}</td></tr>`; }).join('') + `</tbody></table></div>`;
+            };
+            const pendingTable = arr => arr.length ? `<div class="tbl-wrap"><table><thead><tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الإجمالي</th><th>المتبقي</th><th>إجراء</th></tr></thead><tbody>${arr.map(s => {
+                const cust = s.Customer || s.customer || '';
+                const rem = toN(s.RemainingAmount || s.remainingAmount);
+                return `<tr><td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td><td>${esc(s.Date || s.date)}</td><td>${esc(cust)}</td><td>${fm(s.Value || s.value)} ج</td><td style="color:#DC2626;font-weight:bold;">${fm(rem)} ج</td><td><button type="button" class="mini-btn" data-cust="${esc(cust)}" data-amt="${rem}" onclick="quickCollect(this)">💵 تحصيل</button> <button type="button" class="mini-btn" data-n="${esc(cust)}" onclick="openStatement('c', this.getAttribute('data-n'))">📄 كشف</button></td></tr>`;
+            }).join('')}</tbody></table></div>` : '<div class="empty">لا توجد فواتير آجلة.</div>';
+
+            // التنبيهات
+            const alerts = [];
+            checks.forEach(c => {
+                const ci = checkInfo(c);
+                if (ci) alerts.push({ lvl: ci.lvl, txt: `شيك ${pick(c, 'CheckNo', 'CheckNumber', 'Number')} ${pick(c, 'Payee', 'Drawer', 'Customer', 'Supplier')} بمبلغ ${fm(pick(c, 'Amount', 'amount'))} ج — ${ci.text}` });
+            });
+            customers.forEach(c => {
+                const lim = toN(pick(c, 'CreditLimit', 'creditLimit', 'credit_limit'));
+                if (lim > 0 && getBalance(c) > lim) alerts.push({ lvl: 'red', txt: `العميل ${getName(c)} تعدّى الحد الائتماني (${fm(getBalance(c))} من ${fm(lim)} ج)` });
+            });
+            const openCars = {};
+            floorStock.forEach(f => {
+                const q = toN(f.QtyRemaining || f.qtyRemaining), w = toN(f.WeightRemaining || f.weightRemaining);
+                if (q <= 0 && w <= 0) return;
+                const ve = f.Vehicle || f.vehicle || '', su = f.Supplier || f.supplier || '';
+                const ld = loads.find(l => getVehicle(l) === ve && getSupplier(l) === su);
+                const days = ld && getDate(ld) ? dayDiff(getDate(ld)) : -1;
+                const k = su + '|' + ve;
+                if (!openCars[k]) openCars[k] = { ve, su, days };
+            });
+            Object.values(openCars).forEach(o => { if (o.days >= 3) alerts.push({ lvl: o.days >= 7 ? 'red' : 'amber', txt: `سيارة ${o.ve} (المورد ${o.su}) ما زال بها بضاعة منذ ${o.days} يوم` }); });
+            if (syncStale) alerts.push({ lvl: 'amber', txt: 'لم تصل مزامنة من الكمبيوتر منذ أكثر من يوم، افتح برنامج ميزان واضغط «مزامنة فورية».' });
+            alerts.sort((a, b) => (a.lvl === b.lvl ? 0 : a.lvl === 'red' ? -1 : 1));
+            const alertsHtml = alerts.length ? `<div class="alerts">${alerts.map(a => `<div class="al ${a.lvl}">${a.lvl === 'red' ? '🔴' : '🟠'} ${esc(a.txt)}</div>`).join('')}</div>` : '<div class="empty">✅ لا توجد تنبيهات حالياً.</div>';
+
+            // ملخص اليوم
+            const dayStr = String(data.logical_date || todayC).slice(0, 10);
+            const dOf = o => String(o.Date || o.date || '').slice(0, 10);
+            const salesDay = recentSales.filter(x => dOf(x) === dayStr);
+            const dSales = salesDay.reduce((a, x) => a + toN(x.Value || x.value), 0);
+            const dPaid = salesDay.reduce((a, x) => a + toN(x.PaidAmount || x.paidAmount), 0);
+            const dRem = salesDay.reduce((a, x) => a + toN(x.RemainingAmount || x.remainingAmount), 0);
+            const dInv = new Set(salesDay.map(x => x.InvoiceNo || x.invoiceNo)).size;
+            const dCol = collections.filter(x => dOf(x) === dayStr).reduce((a, x) => a + toN(x.Amount || x.amount), 0);
+            const dExp = expenses.filter(x => dOf(x) === dayStr).reduce((a, x) => a + toN(x.Amount || x.amount), 0);
+            const dPur = purchases.filter(x => dOf(x) === dayStr).reduce((a, x) => a + toN(x.Value || x.value), 0);
+            const dayText = `ملخص يوم ${dayStr} - ${data.agency_name}\nالمبيعات: ${fm(dSales)} ج (${dInv} فاتورة)\nمقبوض عند البيع: ${fm(dPaid)} ج\nآجل: ${fm(dRem)} ج\nسندات التحصيل: ${fm(dCol)} ج\nالمصروفات: ${fm(dExp)} ج\nالمشتريات: ${fm(dPur)} ج\nنقدية الدرج: ${fm(drawerCash)} ج`;
+
+            // بيانات مضغوطة للمتصفح (الكشوف، التعديل، التصفية، الرسم البياني)
+            const C_SALES = recentSales.map(x => ({ n: String(x.InvoiceNo || x.invoiceNo || ''), d: dOf(x), c: x.Customer || x.customer || '', i: x.Item || x.item || '', su: x.Supplier || x.supplier || '', lk: x.LoadKey || x.loadKey || '', ve: x.Vehicle || x.vehicle || '', v: toN(x.Value || x.value), p: toN(x.PaidAmount || x.paidAmount), r: toN(x.RemainingAmount || x.remainingAmount), q: toN(x.Qty || x.qty), w: toN(x.Weight || x.weight), pr: toN(x.Price || x.price), ds: toN(x.Discount || x.discount), pm: x.PaymentMethod || x.paymentMethod || '' }));
+            const C_COLS = collections.map(x => ({ n: String(x.ReceiptNo || x.receiptNo || ''), d: dOf(x), c: x.Customer || x.customer || '', a: toN(x.Amount || x.amount), m: x.PaymentMethod || x.paymentMethod || '' }));
+            const C_EXP = expenses.map(x => ({ d: dOf(x), a: toN(x.Amount || x.amount) }));
+            const C_PUR = purchases.map(x => ({ d: dOf(x), s: x.Supplier || x.supplier || '', i: x.Item || x.item || '', v: toN(x.Value || x.value), p: toN(x.PaidAmount || x.paidAmount) }));
+            const C_LOADS = loads.map(l => ({ k: `${getSupplier(l)} | ${getVehicle(l)} | ${getDate(l)}`, s: getSupplier(l), ve: getVehicle(l), d: String(getDate(l)).slice(0, 10), i: getItem(l), f: toN(l.Freight || l.freight), ft: l.FreightType || l.freightType || 'fixed', cm: toN(l.Commission != null ? l.Commission : (l.commission != null ? l.commission : 5)), ct: l.CommissionType || l.commissionType || 'percent' }));
+            const C_CUST = customers.map(c => ({ n: getName(c), b: getBalance(c) }));
+            const C_SUPP = suppliers.map(x => ({ n: getName(x), cm: toN(x.DefaultCommission || x.defaultCommission || 5) }));
+
+            // بضاعة الأرضية مع عمر السيارة
+            const stockRows = floorStock.map(f => {
+                const ve = f.Vehicle || f.vehicle || '', su = f.Supplier || f.supplier || '';
+                const ld = loads.find(l => getVehicle(l) === ve && getSupplier(l) === su);
+                const days = ld && getDate(ld) ? dayDiff(getDate(ld)) : null;
+                return { f, ve, su, days };
+            });
+
             const NAV = [
                 { icon: '🏠', name: 'الرئيسية', open: true, items: [['tab-dash', '🏠', 'الرئيسية']] },
-                { icon: '📊', name: 'الملخصات المالية', open: true, items: [['tab-profit', '📈', 'الأرباح'], ['tab-treasury', '💰', 'الخزنة'], ['tab-payments', '🧾', 'المدفوعات'], ['tab-debts', '📒', 'المديونيات']] },
+                { icon: '📊', name: 'الملخصات المالية', open: true, items: [['tab-profit', '📈', 'الأرباح', 1], ['tab-treasury', '💰', 'الخزنة', 1], ['tab-payments', '🧾', 'المدفوعات'], ['tab-debts', '📒', 'المديونيات'], ['tab-day', '📆', 'ملخص اليوم', 1], ['tab-alerts', '🔔', 'التنبيهات' + (alerts.length ? ' (' + alerts.length + ')' : '')]] },
                 { icon: '🛒', name: 'المبيعات', items: [['tab-pos', '🛒', 'نقطة البيع (POS)'], ['tab-sales-reg', '📋', 'سجل المبيعات'], ['tab-pending', '📄', 'الفواتير الآجلة']] },
-                { icon: '🚚', name: 'التوريد والمخزون', items: [['tab-load', '🚚', 'ساحة توريد السيارات'], ['tab-settle', '🚛', 'تصفية سيارات الأمانة'], ['tab-stock', '📦', 'جرد بضاعة الأرضية'], ['tab-crate', '📦', 'حركة الصناديق والرهن'], ['tab-wb', '⚖️', 'ميزان بسكول']] },
-                { icon: '💼', name: 'الحسابات والخزينة', items: [['tab-col', '🧾', 'سندات التحصيل'], ['tab-exp', '💸', 'الخزينة والمصروفات'], ['tab-pur', '📥', 'فواتير المشتريات'], ['tab-bank', '🏦', 'البنوك والشيكات'], ['tab-master', '👥', 'دليل الحسابات']] },
-                { icon: '⚙️', name: 'الإعدادات', items: [['tab-key', '🔑', 'كود الوكالة والاقتران'], ['tab-printer', '🖨️', 'إعدادات الطابعات']] }
+                { icon: '🚚', name: 'التوريد والمخزون', items: [['tab-load', '🚚', 'ساحة توريد السيارات'], ['tab-settle', '🚛', 'تصفية سيارات الأمانة', 1], ['tab-stock', '📦', 'جرد بضاعة الأرضية'], ['tab-crate', '📦', 'حركة الصناديق والرهن'], ['tab-wb', '⚖️', 'ميزان بسكول']] },
+                { icon: '💼', name: 'الحسابات والخزينة', items: [['tab-col', '🧾', 'سندات التحصيل'], ['tab-exp', '💸', 'الخزينة والمصروفات'], ['tab-pur', '📥', 'فواتير المشتريات'], ['tab-bank', '🏦', 'البنوك والشيكات', 1], ['tab-master', '👥', 'دليل الحسابات'], ['tab-statement', '📄', 'كشف حساب']] },
+                { icon: '⚙️', name: 'الإعدادات', items: [['tab-key', '🔑', 'كود الوكالة والاقتران', 1], ['tab-printer', '🖨️', 'إعدادات الطابعات'], ['tab-log', '🕘', 'سجل النشاط', 1]] }
             ];
 
             const currentOrigin = originOf(req);
@@ -971,6 +1214,27 @@ th { background: #5A0817; color: white; }
 .empty { color: #888; font-size: 13px; padding: 8px; }
 .note { color: #666; font-size: 12px; line-height: 1.7; }
 h4.sec { margin: 16px 0 4px; color: #5A0817; }
+body.nonpriv .priv-only { display: none !important; }
+body.busy .submit-btn { opacity: .6; pointer-events: none; }
+.toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #2A040B; color: #FAF4F1; border: 1px solid #D4AF37; border-radius: 10px; padding: 10px 16px; z-index: 200; font-size: 13px; max-width: 90vw; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+.toast.err { background: #7f1d1d; }
+.mini-btn { width: auto; background: #5A0817; color: #D4AF37; border: 1px solid #D4AF37; border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 11.5px; font-family: inherit; margin: 1px; }
+.mini-btn.red { background: #DC2626; color: #fff; }
+.tb-tools { display: flex; gap: 6px; align-items: center; margin: 8px 0 0; flex-wrap: wrap; }
+.tb-tools input { flex: 1; min-width: 140px; margin: 0; padding: 7px 9px; }
+.bdg { display: inline-block; border-radius: 10px; padding: 2px 8px; font-size: 11px; font-weight: bold; }
+.bdg.red { background: #FEE2E2; color: #B91C1C; }
+.bdg.amber { background: #FEF3C7; color: #92400E; }
+.alerts .al { border-radius: 8px; padding: 8px 10px; margin: 6px 0; font-size: 12.5px; font-weight: bold; }
+.al.red { background: #FEE2E2; color: #991B1B; border: 1px solid #F87171; }
+.al.amber { background: #FEF3C7; color: #92400E; border: 1px solid #F59E0B; }
+.modal-bg { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,.6); z-index: 150; display: flex; align-items: flex-start; justify-content: center; overflow: auto; padding: 16px; }
+.modal { background: #FAF4F1; color: #1E1E1E; border: 2px solid #D4AF37; border-radius: 14px; padding: 16px; max-width: 560px; width: 100%; }
+.line-box { background: #FFF; border: 1px solid #D4AF37; border-radius: 10px; padding: 8px; margin: 8px 0; }
+#offlineBadge { display: none; background: #B45309; color: #fff; border-radius: 8px; padding: 3px 10px; font-size: 11.5px; font-weight: bold; }
+.chart-card { background: #FFF; border: 1px solid #D4AF37; border-radius: 12px; padding: 10px; margin: 10px 0; }
+.act-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.act-row .submit-btn { width: auto; margin-top: 0; padding: 9px 14px; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -1012,10 +1276,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
             <div style="font-size:11px; color:#C8B8B5; margin-top:4px;">اليومية: ${esc(data.logical_date)} | آخر مزامنة: ${new Date(data.last_sync).toLocaleTimeString('ar-EG', { timeZone: 'Africa/Cairo' })}</div>
             <div class="user-bar">
                 <span id="activeUserLabel">👤 الموظف: --</span>
-                <div>
-                    <button type="button" class="tab-btn" style="background:#D4AF37;color:#200308;padding:4px 10px;font-size:11px;margin-left:6px;" onclick="switchTab('tab-key', this)">🔑 كود الوكالة والاقتران</button>
-                    <button class="logout-btn" onclick="handleLogout()">🚪 خروج</button>
-                </div>
+                <span id="offlineBadge" onclick="flushOffline()" style="cursor:pointer"></span>
             </div>
         </div>
 
@@ -1028,6 +1289,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
             <button type="button" class="quick-btn" onclick="setDateRange('today')">اليوم</button>
             <button type="button" class="quick-btn" onclick="setDateRange('month')">الشهر الحالي</button>
             <button type="button" class="quick-btn" onclick="setDateRange('all')">عرض الكل</button>
+            <span id="rangeLabel" class="note" style="margin-right:auto;"></span>
         </div>
 
         <!-- شريط علوي + قائمة جانبية منسدلة -->
@@ -1042,7 +1304,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
             <nav>
                 ${NAV.map(g => `<div class="nav-group${g.open ? ' open' : ''}">
                     <button type="button" class="nav-gh" onclick="toggleGroup(this)"><span>${g.icon} ${g.name}</span><i>▾</i></button>
-                    <div class="nav-gb">${g.items.map(it => `<button type="button" class="nav-item${it[0] === 'tab-dash' ? ' active' : ''}" data-tab="${it[0]}" data-title="${it[1]} ${it[2]}" onclick="switchTab('${it[0]}')"><span>${it[1]}</span>${it[2]}</button>`).join('')}</div>
+                    <div class="nav-gb">${g.items.map(it => `<button type="button" class="nav-item${it[0] === 'tab-dash' ? ' active' : ''}${it[3] ? ' priv-only' : ''}" data-tab="${it[0]}" data-title="${it[1]} ${it[2]}" onclick="switchTab('${it[0]}')"><span>${it[1]}</span>${it[2]}</button>`).join('')}</div>
                 </div>`).join('')}
             </nav>
             <div class="drawer-foot"><a href="/account">👤 حسابي والاشتراك</a><button type="button" onclick="handleLogout()">🚪 خروج</button></div>
@@ -1052,13 +1314,13 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
         <div id="tab-dash" class="tab-content active">
             ${syncLine}
             <div class="home-grid">
-                <div class="big-card c-profit" onclick="switchTab('tab-profit')">
+                <div class="big-card c-profit priv-only" onclick="switchTab('tab-profit')">
                     <div class="bc-top"><span class="bc-ico">📈</span>الأرباح</div>
                     <div class="bc-val">${fm(m.net_profit)} ج</div>
                     <div class="bc-sub">مبيعات اليوم: ${fm(m.today_sales)} ج</div>
                     <div class="bc-go">عرض التفاصيل ◂</div>
                 </div>
-                <div class="big-card c-treasury" onclick="switchTab('tab-treasury')">
+                <div class="big-card c-treasury priv-only" onclick="switchTab('tab-treasury')">
                     <div class="bc-top"><span class="bc-ico">💰</span>الخزنة</div>
                     <div class="bc-val">${fm(drawerCash + bankTotal)} ج</div>
                     <div class="bc-sub">نقدية الدرج: ${fm(drawerCash)} • البنوك: ${fm(bankTotal)}</div>
@@ -1077,6 +1339,8 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
                     <div class="bc-go">عرض التفاصيل ◂</div>
                 </div>
             </div>
+            ${alerts.length ? `<div onclick="switchTab('tab-alerts')" style="cursor:pointer">${alertsHtml}</div>` : ''}
+            <div class="chart-card"><b style="color:#5A0817">📊 آخر 7 أيام (من بيانات المزامنة)</b><div id="chart7"></div></div>
             <div class="mini-row">
                 <div class="mini">💵 مبيعات اليوم<b>${fm(m.today_sales)} ج</b></div>
                 <div class="mini">🚚 سيارات مفتوحة<b>${fm(m.open_cars_count)}</b></div>
@@ -1086,7 +1350,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
         </div>
 
         <!-- تفاصيل: الأرباح -->
-        <div id="tab-profit" class="tab-content">
+        <div id="tab-profit" class="tab-content" data-priv="1">
             <div class="pg-head"><button type="button" class="back-btn" onclick="switchTab('tab-dash')">▸ الرئيسية</button><h3>📈 الأرباح</h3></div>
             ${syncLine}
             <div class="tiles">
@@ -1103,10 +1367,20 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
                 <thead><tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الصنف</th><th>الإجمالي</th></tr></thead>
                 <tbody id="profSalesBody">${recentSales.map(s => `<tr data-date="${esc((s.Date || s.date || '').slice(0, 10))}" data-k="sale" data-amt="${toN(s.Value || s.value)}"><td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td><td>${esc(s.Date || s.date)}</td><td>${esc(s.Customer || s.customer)}</td><td>${esc(s.Item || s.item)}</td><td>${fm(s.Value || s.value)} ج</td></tr>`).join('')}</tbody>
             </table></div>
+            <h4 class="sec">💸 مصروفات الفترة</h4>
+            <div class="tbl-wrap"><table>
+                <thead><tr><th>التاريخ</th><th>البند</th><th>البيان</th><th>المبلغ</th></tr></thead>
+                <tbody id="profExpBody">${expenses.map(e => `<tr data-date="${esc((e.Date || e.date || '').slice(0, 10))}"><td>${esc(e.Date || e.date)}</td><td>${esc(e.Category || e.category)}</td><td>${esc(e.Description || e.description)}</td><td>${fm(e.Amount || e.amount)} ج</td></tr>`).join('')}</tbody>
+            </table></div>
+            <h4 class="sec">📥 تحصيلات الفترة</h4>
+            <div class="tbl-wrap"><table>
+                <thead><tr><th>السند</th><th>التاريخ</th><th>العميل</th><th>المبلغ</th><th>الطريقة</th></tr></thead>
+                <tbody id="profColBody">${collections.map(c => `<tr data-date="${esc((c.Date || c.date || '').slice(0, 10))}"><td><b>${esc(c.ReceiptNo || c.receiptNo)}</b></td><td>${esc(c.Date || c.date)}</td><td>${esc(c.Customer || c.customer)}</td><td>${fm(c.Amount || c.amount)} ج</td><td>${esc(c.PaymentMethod || c.paymentMethod)}</td></tr>`).join('')}</tbody>
+            </table></div>
         </div>
 
         <!-- تفاصيل: الخزنة -->
-        <div id="tab-treasury" class="tab-content">
+        <div id="tab-treasury" class="tab-content" data-priv="1">
             <div class="pg-head"><button type="button" class="back-btn" onclick="switchTab('tab-dash')">▸ الرئيسية</button><h3>💰 الخزنة</h3></div>
             ${syncLine}
             <div class="tiles">
@@ -1118,7 +1392,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
             <h4 class="sec">🏦 الحسابات البنكية</h4>
             ${bankAccounts.length ? `<div class="tbl-wrap"><table><tr><th>البنك / الحساب</th><th>رقم الحساب</th><th>الرصيد</th></tr>${bankAccounts.map(b => `<tr><td><b>${esc(b.BankName || b.bankName)}</b> (${esc(b.AccountName || b.accountName)})</td><td>${esc(b.AccountNumber || b.accountNumber)}</td><td>${fm(b.Balance || b.balance)} ج</td></tr>`).join('')}</table></div>` : '<div class="empty">لا توجد حسابات بنكية مسجلة.</div>'}
             <h4 class="sec">🧾 الشيكات</h4>
-            ${genTable(checks, 'لا توجد شيكات.')}
+            ${checksTable(checks)}
             <button type="button" class="back-btn" style="margin-top:12px" onclick="switchTab('tab-exp')">عرض المصروفات وتسجيل مصروف ◂</button>
         </div>
 
@@ -1163,14 +1437,14 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
             </div>
             <input type="text" id="debtSearch" placeholder="🔎 ابحث باسم العميل..." oninput="filterDebts()" />
             <h4 class="sec">العملاء المدينون (الأعلى مديونية أولاً)</h4>
-            ${debtors.length ? `<div class="tbl-wrap"><table><thead><tr><th>العميل</th><th>المديونية</th></tr></thead><tbody id="debtBody">${debtors.map(x => `<tr data-name="${esc(x.name)}"><td><b>${esc(x.name)}</b></td><td style="color:#DC2626;font-weight:bold;">${fm(x.bal)} ج</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">لا توجد مديونيات.</div>'}
+            ${debtors.length ? `<div class="tbl-wrap"><table><thead><tr><th>العميل</th><th>المديونية</th><th>إجراء</th></tr></thead><tbody id="debtBody">${debtors.map(x => `<tr data-name="${esc(x.name)}"><td><b>${esc(x.name)}</b></td><td style="color:#DC2626;font-weight:bold;">${fm(x.bal)} ج</td><td><button type="button" class="mini-btn" data-cust="${esc(x.name)}" data-amt="${x.bal}" onclick="quickCollect(this)">💵 تحصيل</button> <button type="button" class="mini-btn" data-n="${esc(x.name)}" onclick="openStatement('c', this.getAttribute('data-n'))">📄 كشف</button></td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">لا توجد مديونيات.</div>'}
             ${creditors.length ? `<h4 class="sec">أرصدة دائنة (للعميل عند الوكالة)</h4><div class="tbl-wrap"><table><thead><tr><th>العميل</th><th>الرصيد</th></tr></thead><tbody id="creditBody">${creditors.map(x => `<tr data-name="${esc(x.name)}"><td>${esc(x.name)}</td><td>${fm(Math.abs(x.bal))} ج</td></tr>`).join('')}</tbody></table></div>` : ''}
             <h4 class="sec">📄 الفواتير الآجلة غير المسددة</h4>
-            ${pendingInv.length ? `<div class="tbl-wrap"><table><tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الإجمالي</th><th>المتبقي</th></tr>${pendingInv.map(s => `<tr><td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td><td>${esc(s.Date || s.date)}</td><td>${esc(s.Customer || s.customer)}</td><td>${fm(s.Value || s.value)} ج</td><td style="color:#DC2626;font-weight:bold;">${fm(s.RemainingAmount || s.remainingAmount)} ج</td></tr>`).join('')}</table></div>` : '<div class="empty">لا توجد فواتير آجلة.</div>'}
+            ${pendingTable(pendingInv)}
         </div>
 
         <!-- شاشة عرض كود الوكالة والاقتران الفوري بالـ QR -->
-        <div id="tab-key" class="tab-content">
+        <div id="tab-key" class="tab-content" data-priv="1">
             <div class="form-card" style="text-align:center;">
                 <h3 style="margin-top:0;color:#5A0817;">🔑 كود ربط الوكالة السحابي واقتران الهواتف</h3>
                 <p style="color:#666;font-size:12.5px;">استخدم هذا الكود أو امسح الباركود بالكاميرا لربط أجهزة الكمبيوتر والهواتف بهذه الوكالة فوراً.</p>
@@ -1284,7 +1558,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
                             <td>${Number(s.Weight || s.weight || 0).toLocaleString()} ك</td>
                             <td>${Number(s.Value || s.value || 0).toLocaleString()} ج</td>
                             <td>${Number(s.PaidAmount || s.paidAmount || 0).toLocaleString()} ج</td>
-                            <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteInvoiceAction('${esc(s.InvoiceNo || s.invoiceNo)}')">🗑️ حذف</button></td>
+                            <td><button type="button" class="priv-only" style="background:#5A0817;color:#D4AF37;border:1px solid #D4AF37;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="editInvoice('${esc(s.InvoiceNo || s.invoiceNo)}')">✏️ تعديل</button> <button type="button" class="priv-only" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteInvoiceAction('${esc(s.InvoiceNo || s.invoiceNo)}')">🗑️ حذف</button></td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -1353,37 +1627,43 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
         </div>
 
         <!-- 5. تصفية سيارات الأمانة -->
-        <div id="tab-settle" class="tab-content">
+        <div id="tab-settle" class="tab-content" data-priv="1">
             <div class="form-card">
                 <h3 style="margin-top:0;color:#5A0817;">🚛 تصفية وإقفال سيارة أمانة</h3>
                 <label>اختر السيارة للتصفية</label>
                 <select id="settleLoadSelect" onchange="updateSettlePreview()">
                     <option value="">-- اختر السيارة --</option>
-                    ${loads.map(l => `<option value="${esc(getSupplier(l))} | ${esc(getVehicle(l))} | ${esc(getDate(l))}" data-supplier="${esc(getSupplier(l))}" data-vehicle="${esc(getVehicle(l))}" data-freight="${l.Freight || l.freight || 0}" data-comm="${l.Commission || l.commission || 5}">${esc(getSupplier(l))} | ${esc(getVehicle(l))} (${esc(getItem(l))})</option>`).join('')}
+                    ${loads.map(l => `<option value="${esc(getSupplier(l))} | ${esc(getVehicle(l))} | ${esc(getDate(l))}" data-supplier="${esc(getSupplier(l))}" data-vehicle="${esc(getVehicle(l))}" data-freight="${toN(l.Freight || l.freight)}" data-freighttype="${esc(l.FreightType || l.freightType || 'fixed')}" data-comm="${toN(l.Commission != null ? l.Commission : (l.commission != null ? l.commission : 5))}" data-commtype="${esc(l.CommissionType || l.commissionType || 'percent')}">${esc(getSupplier(l))} | ${esc(getVehicle(l))} (${esc(getItem(l))})</option>`).join('')}
                 </select>
-                <div id="settlePreviewBox" style="margin-top:12px;display:none;" class="card">
-                    <div>المورد: <b id="settleSuppTxt"></b></div>
-                    <div>نولون النقل: <b id="settleFreightTxt">0 ج</b></div>
-                    <div>نسبة العمولة: <b id="settleCommTxt">5%</b></div>
+                <label>خصم الهالك / التالف (جنيه)</label>
+                <input type="number" id="settleDamage" value="0" step="1" min="0" oninput="updateSettlePreview()" />
+                <label>ملاحظات</label>
+                <input type="text" id="settleNotes" placeholder="اختياري" />
+                <div id="settlePreviewBox" class="card" style="margin-top:12px;display:none;"></div>
+                <div class="act-row">
+                    <button type="button" class="submit-btn" onclick="submitSettle()">✅ تأكيد التصفية</button>
+                    <button type="button" class="submit-btn" style="background:#2A040B" onclick="printSettle()">🖨️ طباعة كشف المورد</button>
                 </div>
+                <p class="note">الحساب من مبيعات هذه السيارة المزامنة من الكمبيوتر. بعد التأكيد تُرسل التصفية للكمبيوتر وتُنفّذ عند المزامنة القادمة.</p>
             </div>
         </div>
 
         <!-- 6. جرد بضاعة الأرضية -->
         <div id="tab-stock" class="tab-content">
             <h3>🚚 بضاعة الأرضية والسيارات المفتوحة (${esc(floorStock.length)})</h3>
-            <table>
-                <tr><th>الصنف</th><th>السيارة</th><th>المورد</th><th>باقي عدد</th><th>باقي وزن</th></tr>
-                ${floorStock.map(f => `
-                    <tr>
-                        <td><b>${esc(f.Item || f.item)}</b></td>
-                        <td>${esc(f.Vehicle || f.vehicle)}</td>
-                        <td>${esc(f.Supplier || f.supplier)}</td>
-                        <td>${Number(f.QtyRemaining || f.qtyRemaining || 0).toLocaleString()} ق</td>
-                        <td>${Number(f.WeightRemaining || f.weightRemaining || 0).toLocaleString()} ك</td>
-                    </tr>
-                `).join('')}
-            </table>
+            <div class="tbl-wrap"><table>
+                <thead><tr><th>الصنف</th><th>السيارة</th><th>المورد</th><th>باقي عدد</th><th>باقي وزن</th><th>عمر السيارة</th></tr></thead>
+                <tbody>
+                ${stockRows.map(r => `<tr>
+                        <td><b>${esc(r.f.Item || r.f.item)}</b></td>
+                        <td>${esc(r.ve)}</td>
+                        <td>${esc(r.su)}</td>
+                        <td>${Number(r.f.QtyRemaining || r.f.qtyRemaining || 0).toLocaleString()} ق</td>
+                        <td>${Number(r.f.WeightRemaining || r.f.weightRemaining || 0).toLocaleString()} ك</td>
+                        <td>${r.days == null ? '-' : `<span class="bdg ${r.days >= 7 ? 'red' : r.days >= 3 ? 'amber' : ''}">${r.days} يوم</span>`}</td>
+                    </tr>`).join('')}
+                </tbody>
+            </table></div>
         </div>
 
         <!-- 7. سندات التحصيل والمقبوضات -->
@@ -1392,11 +1672,11 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
                 <h3 style="margin-top:0;color:#5A0817;">🧾 تسجيل سند قبض وتحصيل</h3>
                 <form onsubmit="handleColSubmit(event)">
                     <label>العميل</label>
-                    <select name="Customer" required>
+                    <select name="Customer" id="colCust" required>
                         ${customers.map(c => `<option value="${esc(getName(c))}">${esc(getName(c))} (مديونية: ${getBalance(c).toLocaleString()} ج)</option>`).join('')}
                     </select>
                     <label>المبلغ المحصل (جنيه)</label>
-                    <input type="number" name="Amount" step="1" required />
+                    <input type="number" name="Amount" id="colAmount" step="1" required />
                     <label>طريقة الدفع</label>
                     <select name="PaymentMethod">
                         <option value="نقدي (كاش)">نقدي (كاش)</option>
@@ -1422,7 +1702,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
                             <td>${esc(c.Customer || c.customer)}</td>
                             <td>${Number(c.Amount || c.amount || 0).toLocaleString()} ج</td>
                             <td>${esc(c.PaymentMethod || c.paymentMethod)}</td>
-                            <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteColAction('${esc(c.ReceiptNo || c.receiptNo)}')">🗑️ حذف</button></td>
+                            <td><button type="button" class="priv-only" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteColAction('${esc(c.ReceiptNo || c.receiptNo)}')">🗑️ حذف</button></td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -1432,18 +1712,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
         <!-- 8. الفواتير الآجلة والذمم -->
         <div id="tab-pending" class="tab-content">
             <h3>📄 كشف الفواتير الآجلة غير المسددة بالكامل</h3>
-            <table>
-                <tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الإجمالي</th><th>المتبقي الآجل</th></tr>
-                ${recentSales.filter(s => (s.RemainingAmount || s.remainingAmount) > 0).map(s => `
-                    <tr>
-                        <td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td>
-                        <td>${esc(s.Date || s.date)}</td>
-                        <td>${esc(s.Customer || s.customer)}</td>
-                        <td>${Number(s.Value || s.value || 0).toLocaleString()} ج</td>
-                        <td style="color:#DC2626;font-weight:bold;">${Number(s.RemainingAmount || s.remainingAmount || 0).toLocaleString()} ج</td>
-                    </tr>
-                `).join('')}
-            </table>
+            ${pendingTable(pendingInv)}
         </div>
 
         <!-- 9. الخزينة والمصروفات والرواتب -->
@@ -1480,7 +1749,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
                             <td>${esc(e.Category || e.category)}</td>
                             <td>${esc(e.Description || e.description)}</td>
                             <td>${Number(e.Amount || e.amount || 0).toLocaleString()} ج</td>
-                            <td><button type="button" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteExpAction(${e.Id || e.id || 0})">🗑️ حذف</button></td>
+                            <td><button type="button" class="priv-only" style="background:#DC2626;color:white;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;" onclick="deleteExpAction(${e.Id || e.id || 0})">🗑️ حذف</button></td>
                         </tr>
                     `).join('')}
                 </tbody>
@@ -1563,18 +1832,18 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
         </div>
 
         <!-- 12. البنوك والشيكات -->
-        <div id="tab-bank" class="tab-content">
+        <div id="tab-bank" class="tab-content" data-priv="1">
             <h3>🏦 الحسابات البنكية الجارية</h3>
-            <table>
-                <tr><th>البنك / الحساب</th><th>رقم الحساب</th><th>الرصيد</th></tr>
-                ${bankAccounts.map(b => `
-                    <tr>
+            ${bankAccounts.length ? `<div class="tbl-wrap"><table>
+                <thead><tr><th>البنك / الحساب</th><th>رقم الحساب</th><th>الرصيد</th></tr></thead>
+                <tbody>${bankAccounts.map(b => `<tr>
                         <td><b>${esc(b.BankName || b.bankName)}</b> (${esc(b.AccountName || b.accountName)})</td>
                         <td>${esc(b.AccountNumber || b.accountNumber)}</td>
                         <td>${Number(b.Balance || b.balance || 0).toLocaleString()} ج</td>
-                    </tr>
-                `).join('')}
-            </table>
+                    </tr>`).join('')}</tbody>
+            </table></div>` : '<div class="empty">لا توجد حسابات بنكية مسجلة.</div>'}
+            <h3>🧾 الشيكات (المتأخرة والقريبة تظهر بتنبيه)</h3>
+            ${checksTable(checks)}
         </div>
 
         <!-- 13. ميزان بسكول السيارات -->
@@ -1611,12 +1880,77 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
 
         <!-- 14. دليل الحسابات -->
         <div id="tab-master" class="tab-content">
+            <div class="form-card priv-only">
+                <h3 style="margin-top:0;color:#5A0817;">➕ إضافة عميل أو مورد</h3>
+                <form onsubmit="handlePartySubmit(event)">
+                    <div class="grid-2">
+                        <div><label>النوع</label><select name="Kind" onchange="this.form.Extra.placeholder = this.value === 'c' ? 'الحد الائتماني (اختياري)' : 'نسبة العمولة %'"><option value="c">عميل</option><option value="s">مورد</option></select></div>
+                        <div><label>الاسم</label><input type="text" name="Name" required /></div>
+                    </div>
+                    <div class="grid-2">
+                        <div><label>الهاتف</label><input type="text" name="Phone" /></div>
+                        <div><label>حد ائتماني / عمولة</label><input type="number" name="Extra" step="0.5" placeholder="الحد الائتماني (اختياري)" /></div>
+                    </div>
+                    <button type="submit" class="submit-btn">💾 حفظ وتمرير للمزامنة</button>
+                </form>
+            </div>
             <h3>👥 العملاء والموردين (${customers.length} عميل / ${suppliers.length} مورد)</h3>
-            <table>
-                <tr><th>الاسم</th><th>الصفة</th><th>المديونية / الرصيد</th></tr>
-                ${customers.map(c => `<tr><td>${esc(getName(c))}</td><td>عميل</td><td>${getBalance(c).toLocaleString()} ج</td></tr>`).join('')}
-                ${suppliers.map(s => `<tr><td>${esc(getName(s))}</td><td>مورد</td><td>عمولة: ${esc(s.DefaultCommission || s.defaultCommission || 0)}%</td></tr>`).join('')}
-            </table>
+            <div class="tbl-wrap"><table>
+                <thead><tr><th>الاسم</th><th>الصفة</th><th>المديونية / الرصيد</th><th>إجراء</th></tr></thead>
+                <tbody>
+                ${customers.map(c => `<tr><td>${esc(getName(c))}</td><td>عميل</td><td>${getBalance(c).toLocaleString()} ج</td><td><button type="button" class="mini-btn" data-n="${esc(getName(c))}" onclick="openStatement('c', this.getAttribute('data-n'))">📄 كشف</button></td></tr>`).join('')}
+                ${suppliers.map(s => `<tr><td>${esc(getName(s))}</td><td>مورد</td><td>عمولة: ${esc(s.DefaultCommission || s.defaultCommission || 0)}%</td><td><button type="button" class="mini-btn" data-n="${esc(getName(s))}" onclick="openStatement('s', this.getAttribute('data-n'))">📄 كشف</button></td></tr>`).join('')}
+                </tbody>
+            </table></div>
+        </div>
+
+        <!-- كشف حساب عميل / مورد -->
+        <div id="tab-statement" class="tab-content">
+            <div class="form-card">
+                <h3 style="margin-top:0;color:#5A0817;">📄 كشف حساب</h3>
+                <div class="grid-2">
+                    <div><label>النوع</label><select id="stType" onchange="fillStParties()"><option value="c">عميل</option><option value="s">مورد</option></select></div>
+                    <div><label>الاسم</label><select id="stName"></select></div>
+                </div>
+                <button type="button" class="submit-btn" onclick="renderStatement()">عرض الكشف</button>
+            </div>
+            <div id="stOut"></div>
+        </div>
+
+        <!-- ملخص اليوم -->
+        <div id="tab-day" class="tab-content" data-priv="1">
+            <div class="pg-head"><h3>📆 ملخص يوم ${esc(dayStr)}</h3></div>
+            ${syncLine}
+            <div id="dayOut">
+            <div class="tiles">
+                <div class="tile">المبيعات<b>${fm(dSales)} ج</b></div>
+                <div class="tile">عدد الفواتير<b>${dInv}</b></div>
+                <div class="tile">مقبوض عند البيع<b>${fm(dPaid)} ج</b></div>
+                <div class="tile red">آجل<b>${fm(dRem)} ج</b></div>
+                <div class="tile">سندات التحصيل<b>${fm(dCol)} ج</b></div>
+                <div class="tile red">المصروفات<b>${fm(dExp)} ج</b></div>
+                <div class="tile">المشتريات<b>${fm(dPur)} ج</b></div>
+                <div class="tile">نقدية الدرج<b>${fm(drawerCash)} ج</b></div>
+            </div>
+            </div>
+            <div class="act-row">
+                <button type="button" class="submit-btn" onclick="printOut('dayOut', 'ملخص اليوم')">🖨️ طباعة / PDF</button>
+                <button type="button" class="submit-btn" style="background:#128C7E" data-text="${esc(dayText)}" onclick="shareWa(this.getAttribute('data-text'))">📲 مشاركة واتساب</button>
+            </div>
+            <p class="note">الأرقام من آخر مزامنة. إقفال اليومية نفسه يتم من برنامج الكمبيوتر.</p>
+        </div>
+
+        <!-- التنبيهات -->
+        <div id="tab-alerts" class="tab-content">
+            <div class="pg-head"><h3>🔔 التنبيهات</h3></div>
+            ${alertsHtml}
+        </div>
+
+        <!-- سجل النشاط -->
+        <div id="tab-log" class="tab-content" data-priv="1">
+            <div class="pg-head"><h3>🕘 سجل النشاط</h3><button type="button" class="back-btn" onclick="loadActivity()">🔄 تحديث</button></div>
+            <div class="tbl-wrap"><table><thead><tr><th>الوقت</th><th>المستخدم</th><th>العملية</th></tr></thead><tbody id="logBody"><tr><td colspan="3" class="empty">افتح الشاشة لتحميل السجل.</td></tr></tbody></table></div>
+            <p class="note">آخر 200 عملية تمت من هذه البوابة (إضافة، تعديل، حذف، تصفية).</p>
         </div>
 
         <!-- 15. إعدادات الطابعات والشبكة -->
@@ -1649,12 +1983,22 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
 
     <script>
     const AGENCY_KEY = "${esc(key)}";
+    const AGENCY_NAME = ${jsonS(String(data.agency_name || ''))};
+    const TODAY_C = ${jsonS(todayC)};
+    const SALES = ${jsonS(C_SALES)};
+    const COLS = ${jsonS(C_COLS)};
+    const EXPS = ${jsonS(C_EXP)};
+    const PURS = ${jsonS(C_PUR)};
+    const LOADS = ${jsonS(C_LOADS)};
+    const CUSTS = ${jsonS(C_CUST)};
+    const SUPPS = ${jsonS(C_SUPP)};
     let currentUser = JSON.parse(localStorage.getItem('mizan_staff_' + AGENCY_KEY) || 'null');
     let vehicleCargoItems = [];
     const esc = s => String(s == null ? '' : s).split('&').join('&amp;').split('<').join('&lt;').split('>').join('&gt;').split('"').join('&quot;');
 
     function syncScreenState() {
-        if (currentUser && currentUser.full_name) {
+        applyRole();
+        if (currentUser && currentUser.full_name && currentUser.token) {
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('mainAppScreen').style.display = 'block';
             document.getElementById('activeUserLabel').innerHTML = '👤 الموظف: <b>' + currentUser.full_name + '</b> (' + (currentUser.job_title || currentUser.role) + ')';
@@ -1699,6 +2043,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
             const j = await r.json();
             if (!j.success) { msg.textContent = j.message || 'بيانات الدخول غير صحيحة'; return; }
             currentUser = j.user;
+            currentUser.token = j.token;
             localStorage.setItem('mizan_staff_' + AGENCY_KEY, JSON.stringify(currentUser));
             document.getElementById('loginPassInput').value = '';
             msg.textContent = '';
@@ -1729,8 +2074,9 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
     function toggleGroup(btn) { btn.parentNode.classList.toggle('open'); }
 
     function switchTab(tabId) {
-        document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
         const target = document.getElementById(tabId);
+        if (target && target.getAttribute('data-priv') === '1' && !isPriv()) { toast('هذه الشاشة متاحة للمدير فقط', false); closeDrawer(); return; }
+        document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
         if (target) target.classList.add('active');
         document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.getAttribute('data-tab') === tabId));
         const it = document.querySelector('.nav-item[data-tab="' + tabId + '"]');
@@ -1742,12 +2088,13 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
         closeDrawer();
         window.scrollTo(0, 0);
         try { history.replaceState(null, '', '#' + tabId); } catch (e) {}
+        if (tabId === 'tab-log') loadActivity();
     }
 
     function updateSummaries() {
         const sums = {};
         document.querySelectorAll('tr[data-k]').forEach(tr => {
-            if (tr.style.display === 'none') return;
+            if (tr.getAttribute('data-dh') === '1') return;
             const k = tr.getAttribute('data-k');
             sums[k] = (sums[k] || 0) + (Number(tr.getAttribute('data-amt')) || 0);
             sums[k + '#n'] = (sums[k + '#n'] || 0) + 1;
@@ -1768,7 +2115,7 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
     }
 
     function setDateRange(type) {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Cairo' });
         const fromInput = document.getElementById('filterFromDate');
         const toInput = document.getElementById('filterToDate');
 
@@ -1788,18 +2135,21 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
     function applyGlobalDateFilter() {
         const from = document.getElementById('filterFromDate').value;
         const to = document.getElementById('filterToDate').value;
+        const rl = document.getElementById('rangeLabel');
+        if (rl) rl.textContent = (from || to) ? ('الفترة: ' + (from || 'البداية') + ' ← ' + (to || 'اليوم')) : 'الفترة: عرض الكل';
 
-        ['salesTableBody', 'colTableBody', 'expTableBody', 'profSalesBody', 'payInBody', 'salePaidBody', 'payOutBody'].forEach(bodyId => {
+        ['salesTableBody', 'colTableBody', 'expTableBody', 'profSalesBody', 'profExpBody', 'profColBody', 'payInBody', 'salePaidBody', 'payOutBody'].forEach(bodyId => {
             const tbody = document.getElementById(bodyId);
             if (!tbody) return;
             const rows = tbody.querySelectorAll('tr');
             rows.forEach(tr => {
                 const rowDate = tr.getAttribute('data-date');
-                if (!rowDate) { tr.style.display = ''; return; }
+                if (!rowDate) { tr.style.display = ''; tr.setAttribute('data-dh', '0'); return; }
                 let show = true;
                 if (from && rowDate < from) show = false;
                 if (to && rowDate > to) show = false;
-                tr.style.display = show ? '' : 'none';
+                tr.setAttribute('data-dh', show ? '0' : '1');
+                tr.style.display = (show && tr.getAttribute('data-sh') !== '1') ? '' : 'none';
             });
         });
         updateSummaries();
@@ -1924,37 +2274,70 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
         setTimeout(() => { area.style.display = 'none'; }, 1000);
     }
 
-    async function sendAction(action_type, data) {
-        if (!currentUser || !currentUser.full_name) {
-            alert('انتهت الجلسة، يرجى تسجيل الدخول مجدداً.');
-            handleLogout();
-            return false;
-        }
+    // ===== أدوات عامة =====
+    function isPriv() { return !!(currentUser && currentUser.privileged); }
+    function applyRole() { document.body.classList.toggle('nonpriv', !isPriv()); }
+    var toastTimer = null;
+    function toast(msg, ok) {
+        var t = document.getElementById('toastBox');
+        if (!t) { t = document.createElement('div'); t.id = 'toastBox'; document.body.appendChild(t); }
+        t.className = 'toast' + (ok === false ? ' err' : '');
+        t.textContent = msg; t.style.display = 'block';
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { t.style.display = 'none'; }, 4500);
+    }
+    function uid() { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10); }
+    function fmt(n) { return (Number(n) || 0).toLocaleString('en-US'); }
+    function forceLogout() { currentUser = null; localStorage.removeItem('mizan_staff_' + AGENCY_KEY); syncScreenState(); }
+
+    // ===== الإرسال: حماية من الضغط المزدوج + طابور عدم الاتصال =====
+    var QK = 'mizan_offq_' + AGENCY_KEY;
+    var sending = false, flushing = false;
+    function getQ() { try { return JSON.parse(localStorage.getItem(QK) || '[]'); } catch (e) { return []; } }
+    function setQ(q) { try { localStorage.setItem(QK, JSON.stringify(q)); } catch (e) {} updateOfflineBadge(); }
+    function updateOfflineBadge() {
+        var b = document.getElementById('offlineBadge'); if (!b) return;
+        var n = getQ().length;
+        b.style.display = n ? 'inline-block' : 'none';
+        b.textContent = '⏳ ' + n + ' عملية بانتظار الإرسال (اضغط للمحاولة)';
+    }
+    async function postAction(item) {
         try {
-            const r = await fetch('/api/web/create-action', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    agency_key: AGENCY_KEY,
-                    action_type,
-                    user_name: currentUser.full_name,
-                    source: 'server',
-                    data
-                })
-            });
-            if (r.status === 402) { location.href = '/pay?key=' + encodeURIComponent(AGENCY_KEY); return false; }
-            const j = await r.json();
-            if (j.success) {
-                alert(j.message);
-                return true;
-            } else {
-                alert('خطأ: ' + (j.message || 'فشلت العملية'));
-                return false;
-            }
-        } catch (e) {
-            alert('تعذر الاتصال بالسيرفر السحابي: ' + e.message);
-            return false;
+            var r = await fetch('/api/web/create-action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
+            var j = null; try { j = await r.json(); } catch (e) {}
+            return { status: r.status, json: j };
+        } catch (e) { return { netErr: true }; }
+    }
+    async function flushOffline() {
+        if (flushing) return;
+        var q = getQ(); if (!q.length) return;
+        flushing = true; var rest = [], sent = 0;
+        for (var i = 0; i < q.length; i++) {
+            var res = await postAction(q[i]);
+            if (res.netErr || res.status >= 500) { rest = q.slice(i); break; }
+            if (res.json && res.json.success) sent++;
+            else toast('تعذر إرسال عملية محفوظة: ' + ((res.json && res.json.message) || res.status), false);
         }
+        setQ(rest); flushing = false;
+        if (sent) toast('تم إرسال ' + sent + ' عملية كانت معلّقة ✅');
+    }
+    async function sendAction(action_type, data) {
+        if (!currentUser || !currentUser.full_name || !currentUser.token) { toast('انتهت الجلسة، سجّل الدخول من جديد', false); forceLogout(); return false; }
+        if (sending) { toast('جاري إرسال عملية أخرى، انتظر لحظة...', false); return false; }
+        sending = true; document.body.classList.add('busy');
+        try {
+            var item = { agency_key: AGENCY_KEY, action_type: action_type, user_name: currentUser.full_name, source: 'server', data: data, client_id: uid(), token: currentUser.token };
+            var res = await postAction(item);
+            if (res.netErr) {
+                var q = getQ(); q.push(item); setQ(q);
+                toast('لا يوجد اتصال: تم حفظ العملية على جهازك وستُرسل تلقائياً عند عودة الإنترنت');
+                return true;
+            }
+            if (res.status === 402) { location.href = '/pay?key=' + encodeURIComponent(AGENCY_KEY); return false; }
+            if (res.json && res.json.success) { toast(res.json.duplicate ? res.json.message : 'تم الحفظ وتمريره للمزامنة ✅'); return true; }
+            toast('خطأ: ' + ((res.json && res.json.message) || 'فشلت العملية'), false);
+            return false;
+        } finally { sending = false; document.body.classList.remove('busy'); }
     }
 
     async function handlePosSubmit(e) {
@@ -2102,6 +2485,322 @@ h4.sec { margin: 16px 0 4px; color: #5A0817; }
             await sendAction('DELETE_EXPENSE', { Id: expId });
         }
     }
+
+    // ===== جداول: بحث + تصدير Excel + طباعة =====
+    function bodyRows(t) { return Array.prototype.filter.call(t.querySelectorAll('tr'), function (tr) { return !tr.querySelector('th'); }); }
+    function actionCols(t) {
+        var idx = {};
+        t.querySelectorAll('tr').forEach(function (tr) {
+            Array.prototype.forEach.call(tr.children, function (c, i) {
+                if (c.querySelector('button') || (c.tagName === 'TH' && c.textContent.trim() === 'إجراء')) idx[i] = 1;
+            });
+        });
+        return idx;
+    }
+    function tableRowsText(t) {
+        var idx = actionCols(t), out = [];
+        t.querySelectorAll('tr').forEach(function (tr) {
+            if (tr.style.display === 'none') return;
+            var cells = [];
+            Array.prototype.forEach.call(tr.children, function (c, i) {
+                if (!idx[i]) cells.push(c.textContent.split(String.fromCharCode(10)).join(' ').trim());
+            });
+            if (cells.length) out.push(cells);
+        });
+        return out;
+    }
+    function csvCell(v) { return '"' + String(v).split('"').join('""') + '"'; }
+    function exportCsv(tbls, name) {
+        var NL = String.fromCharCode(10), lines = [];
+        tbls.forEach(function (t, i) {
+            if (i) lines.push('');
+            tableRowsText(t).forEach(function (r) { lines.push(r.map(csvCell).join(',')); });
+        });
+        var blob = new Blob([String.fromCharCode(65279) + lines.join(NL)], { type: 'text/csv;charset=utf-8' });
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = name + '-' + TODAY_C + '.csv';
+        document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    }
+    function tableHtml(t) {
+        var c = t.cloneNode(true), idx = actionCols(c);
+        c.querySelectorAll('tr').forEach(function (tr) {
+            if (tr.style.display === 'none') { tr.parentNode.removeChild(tr); return; }
+            var cells = Array.prototype.slice.call(tr.children);
+            for (var i = cells.length - 1; i >= 0; i--) { if (idx[i]) tr.removeChild(cells[i]); }
+        });
+        return '<table>' + c.innerHTML + '</table>';
+    }
+    function openPrint(title, html) {
+        var w = window.open('', '_blank');
+        if (!w) { toast('اسمح بالنوافذ المنبثقة لإتمام الطباعة', false); return; }
+        w.document.write('<!DOCTYPE html><html dir="rtl" lang="ar"><head><meta charset="UTF-8"><title>' + esc(title) + '</title><style>body{font-family:Tahoma,Arial,sans-serif;padding:16px;color:#000}table{width:100%;border-collapse:collapse;margin:8px 0}th,td{border:1px solid #444;padding:5px 7px;font-size:12px;text-align:right}th{background:#eee}.tile{display:inline-block;border:1px solid #444;padding:6px 10px;margin:3px;font-size:12px}.tile b{display:block;font-size:15px}button,.tb-tools,.act-row{display:none}</style></head><body><h2>' + esc(AGENCY_NAME) + '</h2><h3>' + esc(title) + '</h3><div style="font-size:11px;color:#555">التاريخ: ' + TODAY_C + '</div>' + html + '<p style="font-size:11px;color:#555;margin-top:20px">تم الإنشاء بواسطة منظومة ميزان</p></body></html>');
+        w.document.close(); w.focus();
+        setTimeout(function () { w.print(); }, 300);
+    }
+    function printOut(id, title) { openPrint(title, document.getElementById(id).innerHTML); }
+    function shareWa(text) { window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank'); }
+    function exportOut(id, name) { var ts = document.getElementById(id).querySelectorAll('table'); if (!ts.length) { toast('لا توجد جداول للتصدير', false); return; } exportCsv(Array.prototype.slice.call(ts), name); }
+
+    function initTableTools() {
+        document.querySelectorAll('.tab-content table').forEach(function (t) {
+            if (t.closest('#tab-key') || t.closest('#tab-printer') || t.closest('#tab-day') || t.closest('#stOut') || t.querySelector('#debtBody') || t.querySelector('#creditBody') || t.querySelector('#logBody')) return;
+            if (bodyRows(t).length < 6) return;
+            var host = t.parentNode.classList.contains('tbl-wrap') ? t.parentNode : t;
+            var bar = document.createElement('div'); bar.className = 'tb-tools';
+            var inp = document.createElement('input'); inp.type = 'text'; inp.placeholder = '🔎 بحث في الجدول...';
+            var bx = document.createElement('button'); bx.type = 'button'; bx.className = 'mini-btn'; bx.textContent = '⬇ Excel';
+            var bp = document.createElement('button'); bp.type = 'button'; bp.className = 'mini-btn'; bp.textContent = '🖨️ PDF / طباعة';
+            bar.appendChild(inp); bar.appendChild(bx); bar.appendChild(bp);
+            host.parentNode.insertBefore(bar, host);
+            inp.addEventListener('input', function () {
+                var q = inp.value.trim().toLowerCase();
+                bodyRows(t).forEach(function (tr) {
+                    var ok = !q || tr.textContent.toLowerCase().indexOf(q) > -1;
+                    tr.setAttribute('data-sh', ok ? '0' : '1');
+                    tr.style.display = (!ok || tr.getAttribute('data-dh') === '1') ? 'none' : '';
+                });
+            });
+            bx.addEventListener('click', function () { exportCsv([t], 'mizan'); });
+            bp.addEventListener('click', function () { openPrint(document.getElementById('topTitle').textContent, tableHtml(t)); });
+        });
+    }
+
+    // ===== تحصيل سريع =====
+    function quickCollect(btn) {
+        switchTab('tab-col');
+        var sel = document.getElementById('colCust'), amt = document.getElementById('colAmount'), c = btn.getAttribute('data-cust');
+        if (sel) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === c) { sel.selectedIndex = i; break; } } }
+        if (amt) { amt.value = btn.getAttribute('data-amt'); amt.focus(); }
+    }
+
+    // ===== نافذة + تعديل فاتورة =====
+    var editState = null;
+    function openModal(html) {
+        closeModal();
+        var bg = document.createElement('div'); bg.className = 'modal-bg'; bg.id = 'modalBg';
+        bg.innerHTML = '<div class="modal">' + html + '</div>';
+        document.body.appendChild(bg); document.body.style.overflow = 'hidden';
+    }
+    function closeModal() { var bg = document.getElementById('modalBg'); if (bg) bg.remove(); document.body.style.overflow = ''; }
+    function editInvoice(no) {
+        if (!isPriv()) { toast('التعديل للمدير فقط', false); return; }
+        var rows = SALES.filter(function (x) { return x.n === no; });
+        if (!rows.length) { toast('الفاتورة غير موجودة في البيانات المزامنة', false); return; }
+        var paid = 0, rem = 0;
+        rows.forEach(function (r) { paid += r.p; rem += r.r; });
+        editState = { no: no, date: rows[0].d, auto: rem <= 0, rows: rows, total: 0 };
+        var h = '<h3 style="margin-top:0;color:#5A0817">✏️ تعديل الفاتورة #' + esc(no) + '</h3><label>العميل</label><select id="edCust">';
+        var names = ['عميل نقدي'];
+        CUSTS.forEach(function (c) { if (names.indexOf(c.n) < 0) names.push(c.n); });
+        if (names.indexOf(rows[0].c) < 0) names.push(rows[0].c);
+        names.forEach(function (n) { h += '<option value="' + esc(n) + '"' + (n === rows[0].c ? ' selected' : '') + '>' + esc(n) + '</option>'; });
+        h += '</select>';
+        rows.forEach(function (r, i) {
+            h += '<div class="line-box"><b>' + esc(r.i) + '</b><div class="grid-2"><div><label>العدد</label><input type="number" id="edQ' + i + '" value="' + r.q + '" oninput="calcEdit()"></div><div><label>الوزن</label><input type="number" id="edW' + i + '" value="' + r.w + '" step="0.1" oninput="calcEdit()"></div></div><div class="grid-2"><div><label>السعر</label><input type="number" id="edP' + i + '" value="' + r.pr + '" step="0.5" oninput="calcEdit()"></div><div><label>الخصم</label><input type="number" id="edD' + i + '" value="' + r.ds + '" oninput="calcEdit()"></div></div><div>قيمة البند: <b id="edV' + i + '"></b></div></div>';
+        });
+        var pays = ['نقدي (كاش)', 'آجل على الحساب', 'إنستاباي (InstaPay)', 'فودافون كاش / محفظة'];
+        if (rows[0].pm && pays.indexOf(rows[0].pm) < 0) pays.push(rows[0].pm);
+        h += '<label>طريقة السداد</label><select id="edPay">';
+        pays.forEach(function (m) { h += '<option value="' + esc(m) + '"' + (m === rows[0].pm ? ' selected' : '') + '>' + esc(m) + '</option>'; });
+        h += '</select><label>المدفوع (جنيه)</label><input type="number" id="edPaid" value="' + paid + '" oninput="editState.auto=false;calcEdit()">';
+        h += '<div class="card" style="margin-top:10px">الإجمالي: <b id="edTotal"></b> — المتبقي: <b id="edRem"></b></div>';
+        h += '<div class="act-row"><button type="button" class="submit-btn" onclick="saveEdit()">💾 حفظ التعديل</button><button type="button" class="submit-btn" style="background:#666" onclick="closeModal()">إلغاء</button></div>';
+        h += '<p class="note">التعديل يستبدل الفاتورة القديمة بنفس رقمها ولا يضيف فاتورة جديدة.</p>';
+        openModal(h); calcEdit();
+    }
+    function edNum(id) { return parseFloat(document.getElementById(id).value) || 0; }
+    function calcEdit() {
+        var total = 0;
+        editState.rows.forEach(function (r, i) {
+            var q = edNum('edQ' + i), w = edNum('edW' + i), p = edNum('edP' + i), d = edNum('edD' + i);
+            var v = Math.max(0, (w > 0 ? w : q) * p - d);
+            r._v = v; total += v;
+            document.getElementById('edV' + i).textContent = fmt(Math.round(v)) + ' ج';
+        });
+        var pe = document.getElementById('edPaid');
+        if (editState.auto) pe.value = Math.round(total);
+        var paid = parseFloat(pe.value) || 0;
+        editState.total = total;
+        document.getElementById('edTotal').textContent = fmt(Math.round(total)) + ' ج';
+        document.getElementById('edRem').textContent = fmt(Math.round(Math.max(0, total - paid))) + ' ج';
+    }
+    async function saveEdit() {
+        calcEdit();
+        var paid = edNum('edPaid'), total = editState.total;
+        if (paid > total + 0.001) { toast('المدفوع أكبر من إجمالي الفاتورة', false); return; }
+        var items = editState.rows.map(function (r, i) {
+            return { Item: r.i, Supplier: r.su || 'عام', LoadKey: r.lk || '', Qty: edNum('edQ' + i), Weight: edNum('edW' + i), Price: edNum('edP' + i), Discount: edNum('edD' + i), Value: r._v };
+        });
+        var data = { InvoiceNo: editState.no, Date: editState.date, Customer: document.getElementById('edCust').value, PaymentMethod: document.getElementById('edPay').value, PaidAmount: paid, RemainingAmount: Math.max(0, total - paid), Items: items };
+        if (!confirm('تأكيد تعديل الفاتورة #' + editState.no + '؟')) return;
+        var ok = await sendAction('EDIT_INVOICE', data);
+        if (ok) closeModal();
+    }
+
+    // ===== تصفية سيارات الأمانة =====
+    function loadSales(l) {
+        var t = 0, seen = {}, cnt = 0;
+        SALES.forEach(function (s) {
+            var m = s.lk ? s.lk === l.k : (s.su === l.s && s.ve === l.ve);
+            if (m) { t += s.v; if (!seen[s.n]) { seen[s.n] = 1; cnt++; } }
+        });
+        return { total: t, count: cnt };
+    }
+    function loadFigures(l, damage) {
+        var ls = loadSales(l);
+        var comm = l.ct === 'percent' ? ls.total * l.cm / 100 : l.cm;
+        var fr = l.ft === 'percent' ? ls.total * l.f / 100 : l.f;
+        return { total: ls.total, count: ls.count, comm: comm, freight: fr, damage: damage || 0, net: ls.total - comm - fr - (damage || 0) };
+    }
+    function currentLoad() {
+        var sel = document.getElementById('settleLoadSelect');
+        if (!sel || sel.selectedIndex < 1) return null;
+        return LOADS[sel.selectedIndex - 1] || null;
+    }
+    function settleHtml(l, f) {
+        var rate = l.ct === 'percent' ? (l.cm + '%') : 'مبلغ ثابت';
+        return '<div>المورد: <b>' + esc(l.s) + '</b> — السيارة: <b>' + esc(l.ve) + '</b> — ' + esc(l.i) + '</div>' +
+            '<div>عدد الفواتير: <b>' + f.count + '</b></div>' +
+            '<div>إجمالي المبيعات: <b>' + fmt(Math.round(f.total)) + ' ج</b></div>' +
+            '<div>العمولة (' + rate + '): <b>' + fmt(Math.round(f.comm)) + ' ج</b></div>' +
+            '<div>النولون: <b>' + fmt(Math.round(f.freight)) + ' ج</b></div>' +
+            '<div>الهالك / التالف: <b>' + fmt(Math.round(f.damage)) + ' ج</b></div>' +
+            '<div style="margin-top:6px;font-size:16px">صافي المورد: <b style="color:' + (f.net < 0 ? '#DC2626' : '#0D7857') + '">' + fmt(Math.round(f.net)) + ' ج</b></div>' +
+            (f.total <= 0 ? '<div style="color:#B45309;margin-top:6px">⚠️ لا توجد مبيعات مسجلة لهذه السيارة في البيانات المزامنة.</div>' : '');
+    }
+    function updateSettlePreview() {
+        var box = document.getElementById('settlePreviewBox'), l = currentLoad();
+        if (!l) { box.style.display = 'none'; return; }
+        box.style.display = 'block';
+        box.innerHTML = settleHtml(l, loadFigures(l, edNumSafe('settleDamage')));
+    }
+    function edNumSafe(id) { var e = document.getElementById(id); return e ? (parseFloat(e.value) || 0) : 0; }
+    async function submitSettle() {
+        var l = currentLoad();
+        if (!l) { toast('اختر السيارة أولاً', false); return; }
+        var dmg = edNumSafe('settleDamage'), f = loadFigures(l, dmg);
+        if (f.total <= 0 && !confirm('لا توجد مبيعات لهذه السيارة. هل تريد المتابعة؟')) return;
+        if (f.net < 0 && !confirm('صافي المورد بالسالب. هل تريد المتابعة؟')) return;
+        if (!confirm('تأكيد تصفية سيارة ' + l.ve + ' للمورد ' + l.s + ' بصافي ' + fmt(Math.round(f.net)) + ' ج؟')) return;
+        await sendAction('SETTLE_VEHICLE', { LoadKey: l.k, Supplier: l.s, Vehicle: l.ve, TotalSales: f.total, CommissionRate: l.cm, CommissionType: l.ct, CommissionAmount: f.comm, Freight: f.freight, Damage: dmg, NetDue: f.net, Notes: document.getElementById('settleNotes').value });
+    }
+    function printSettle() {
+        var l = currentLoad();
+        if (!l) { toast('اختر السيارة أولاً', false); return; }
+        openPrint('كشف تصفية سيارة أمانة', '<div style="line-height:2">' + settleHtml(l, loadFigures(l, edNumSafe('settleDamage'))) + '</div>');
+    }
+
+    // ===== كشوف الحساب =====
+    var stText = '';
+    function htmlTable(headers, rows) {
+        var h = '<div class="tbl-wrap"><table><thead><tr>' + headers.map(function (x) { return '<th>' + x + '</th>'; }).join('') + '</tr></thead><tbody>';
+        rows.forEach(function (r) { h += '<tr>' + r.map(function (c) { return '<td>' + c + '</td>'; }).join('') + '</tr>'; });
+        return h + '</tbody></table></div>';
+    }
+    function fillStParties() {
+        var sel = document.getElementById('stName'), t = document.getElementById('stType');
+        if (!sel || !t) return;
+        var arr = t.value === 'c' ? CUSTS : SUPPS;
+        sel.innerHTML = arr.map(function (x) { return '<option value="' + esc(x.n) + '">' + esc(x.n) + '</option>'; }).join('');
+    }
+    function openStatement(type, name) {
+        switchTab('tab-statement');
+        document.getElementById('stType').value = type; fillStParties();
+        document.getElementById('stName').value = name; renderStatement();
+    }
+    function tile(label, val, red) { return '<div class="tile' + (red ? ' red' : '') + '"><span>' + label + '</span><b>' + val + '</b></div>'; }
+    function renderStatement() {
+        var type = document.getElementById('stType').value, name = document.getElementById('stName').value, out = document.getElementById('stOut');
+        if (!name) { out.innerHTML = '<div class="empty">اختر الاسم أولاً.</div>'; return; }
+        var html = '', NL = String.fromCharCode(10);
+        if (type === 'c') {
+            var inv = {}, order = [];
+            SALES.forEach(function (s) {
+                if (s.c !== name) return;
+                if (!inv[s.n]) { inv[s.n] = { n: s.n, d: s.d, v: 0, p: 0, r: 0 }; order.push(s.n); }
+                inv[s.n].v += s.v; inv[s.n].p += s.p; inv[s.n].r += s.r;
+            });
+            var list = order.map(function (k) { return inv[k]; }).sort(function (a, b) { return a.d < b.d ? 1 : -1; });
+            var cols = COLS.filter(function (c) { return c.c === name; }).sort(function (a, b) { return a.d < b.d ? 1 : -1; });
+            var tv = 0, tp = 0, tr = 0, tc = 0, bal = 0;
+            list.forEach(function (x) { tv += x.v; tp += x.p; tr += x.r; });
+            cols.forEach(function (c) { tc += c.a; });
+            CUSTS.forEach(function (c) { if (c.n === name) bal = c.b; });
+            html = '<div class="form-card" id="stCard"><h3 style="margin-top:0;color:#5A0817">كشف حساب العميل: ' + esc(name) + '</h3><div class="note">' + esc(AGENCY_NAME) + ' — بتاريخ ' + TODAY_C + '</div><div class="tiles">' +
+                tile('إجمالي المبيعات', fmt(tv) + ' ج') + tile('مدفوع عند البيع', fmt(tp) + ' ج') + tile('آجل', fmt(tr) + ' ج', 1) + tile('سندات التحصيل', fmt(tc) + ' ج') + tile('الرصيد الحالي', fmt(bal) + ' ج', bal > 0) + '</div>' +
+                '<h4 class="sec">الفواتير</h4>' + (list.length ? htmlTable(['الفاتورة', 'التاريخ', 'الإجمالي', 'المدفوع', 'المتبقي'], list.map(function (x) { return [esc(x.n), esc(x.d), fmt(x.v), fmt(x.p), fmt(x.r)]; })) : '<div class="empty">لا توجد فواتير في البيانات المزامنة.</div>') +
+                '<h4 class="sec">سندات التحصيل</h4>' + (cols.length ? htmlTable(['السند', 'التاريخ', 'المبلغ', 'الطريقة'], cols.map(function (c) { return [esc(c.n), esc(c.d), fmt(c.a), esc(c.m)]; })) : '<div class="empty">لا توجد سندات.</div>') +
+                '<p class="note">الرصيد الحالي كما وصل من برنامج الكمبيوتر، والفواتير والسندات هي آخر ما تمت مزامنته.</p></div>';
+            stText = 'كشف حساب العميل ' + name + ' - ' + AGENCY_NAME + NL + 'إجمالي المبيعات: ' + fmt(tv) + ' ج' + NL + 'سندات التحصيل: ' + fmt(tc) + ' ج' + NL + 'الرصيد الحالي: ' + fmt(bal) + ' ج';
+        } else {
+            var mine = LOADS.filter(function (l) { return l.s === name; }), gt = 0, gc = 0, gf = 0, rows = [];
+            mine.forEach(function (l) {
+                var f = loadFigures(l, 0);
+                gt += f.total; gc += f.comm; gf += f.freight;
+                rows.push([esc(l.d), esc(l.ve), esc(l.i), fmt(Math.round(f.total)), fmt(Math.round(f.comm)), fmt(Math.round(f.freight)), fmt(Math.round(f.net))]);
+            });
+            var pv = 0, pp = 0, prow = [];
+            PURS.forEach(function (p) { if (p.s === name) { pv += p.v; pp += p.p; prow.push([esc(p.d), esc(p.i), fmt(p.v), fmt(p.p), fmt(Math.max(0, p.v - p.p))]); } });
+            var net = gt - gc - gf;
+            html = '<div class="form-card" id="stCard"><h3 style="margin-top:0;color:#5A0817">كشف حساب المورد: ' + esc(name) + '</h3><div class="note">' + esc(AGENCY_NAME) + ' — بتاريخ ' + TODAY_C + '</div><div class="tiles">' +
+                tile('عدد السيارات', mine.length) + tile('إجمالي المبيعات', fmt(Math.round(gt)) + ' ج') + tile('العمولة', fmt(Math.round(gc)) + ' ج') + tile('النولون', fmt(Math.round(gf)) + ' ج') + tile('الصافي التقديري', fmt(Math.round(net)) + ' ج') + tile('مشتريات من المورد', fmt(pv) + ' ج') + '</div>' +
+                '<h4 class="sec">السيارات</h4>' + (rows.length ? htmlTable(['التاريخ', 'السيارة', 'الصنف', 'المبيعات', 'العمولة', 'النولون', 'الصافي'], rows) : '<div class="empty">لا توجد سيارات لهذا المورد.</div>') +
+                (prow.length ? '<h4 class="sec">فواتير المشتريات</h4>' + htmlTable(['التاريخ', 'الصنف', 'القيمة', 'المدفوع', 'المتبقي'], prow) : '') +
+                '<p class="note">الصافي تقديري قبل الهالك وأي تصفيات سابقة. استخدم شاشة التصفية للإقفال.</p></div>';
+            stText = 'كشف حساب المورد ' + name + ' - ' + AGENCY_NAME + NL + 'عدد السيارات: ' + mine.length + NL + 'إجمالي المبيعات: ' + fmt(Math.round(gt)) + ' ج' + NL + 'العمولة: ' + fmt(Math.round(gc)) + ' ج' + NL + 'النولون: ' + fmt(Math.round(gf)) + ' ج' + NL + 'الصافي التقديري: ' + fmt(Math.round(net)) + ' ج';
+        }
+        html += '<div class="act-row"><button type="button" class="submit-btn" onclick="printOut(\\'stCard\\', \\'كشف حساب\\')">🖨️ طباعة / PDF</button><button type="button" class="submit-btn" style="background:#128C7E" onclick="shareWa(stText)">📲 مشاركة واتساب</button><button type="button" class="submit-btn" style="background:#2A040B" onclick="exportOut(\\'stCard\\', \\'kashf\\')">⬇ Excel</button></div>';
+        out.innerHTML = html;
+    }
+
+    // ===== إضافة عميل / مورد =====
+    async function handlePartySubmit(e) {
+        e.preventDefault();
+        var f = e.target, isC = f.Kind.value === 'c', x = parseFloat(f.Extra.value) || 0;
+        var data = { Name: f.Name.value.trim(), Phone: f.Phone.value.trim() };
+        if (isC) data.CreditLimit = x; else data.DefaultCommission = x || 5;
+        var ok = await sendAction(isC ? 'ADD_CUSTOMER' : 'ADD_SUPPLIER', data);
+        if (ok) f.reset();
+    }
+
+    // ===== رسم آخر 7 أيام =====
+    function chart7() {
+        var box = document.getElementById('chart7'); if (!box) return;
+        var days = [], i;
+        for (i = 6; i >= 0; i--) { var d = new Date(TODAY_C + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - i); days.push(d.toISOString().slice(0, 10)); }
+        function sum(arr, key) { var m = {}; arr.forEach(function (x) { m[x.d] = (m[x.d] || 0) + x[key]; }); return days.map(function (dd) { return m[dd] || 0; }); }
+        var series = [{ n: 'مبيعات', c: '#0D7857', v: sum(SALES, 'v') }, { n: 'تحصيلات', c: '#2563EB', v: sum(COLS, 'a') }, { n: 'مصروفات', c: '#DC2626', v: sum(EXPS, 'a') }];
+        var max = 1; series.forEach(function (s) { s.v.forEach(function (x) { if (x > max) max = x; }); });
+        var W = 700, H = 210, padB = 30, padT = 12, gw = W / 7, bw = 16;
+        var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto">';
+        days.forEach(function (dd, di) {
+            series.forEach(function (s, si) {
+                var h = Math.round((s.v[di] / max) * (H - padB - padT)), x = di * gw + gw / 2 - 26 + si * (bw + 2), y = H - padB - h;
+                svg += '<rect x="' + x + '" y="' + y + '" width="' + bw + '" height="' + h + '" rx="3" fill="' + s.c + '"><title>' + s.n + ': ' + fmt(s.v[di]) + '</title></rect>';
+            });
+            svg += '<text x="' + (di * gw + gw / 2) + '" y="' + (H - 10) + '" font-size="12" text-anchor="middle" fill="#5A0817">' + dd.slice(8) + '/' + dd.slice(5, 7) + '</text>';
+        });
+        svg += '</svg>';
+        var legend = '<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:12px;margin-top:4px">' + series.map(function (s) { return '<span><i style="display:inline-block;width:10px;height:10px;background:' + s.c + ';border-radius:2px;margin-left:4px"></i>' + s.n + ' (' + fmt(s.v.reduce(function (a, b) { return a + b; }, 0)) + ')</span>'; }).join('') + '</div>';
+        box.innerHTML = svg + legend;
+    }
+
+    // ===== سجل النشاط =====
+    async function loadActivity() {
+        var body = document.getElementById('logBody');
+        body.innerHTML = '<tr><td colspan="3">جاري التحميل...</td></tr>';
+        try {
+            var r = await fetch('/api/web/activity?key=' + encodeURIComponent(AGENCY_KEY), { headers: { 'x-session-token': currentUser.token } });
+            var j = await r.json();
+            if (!j.success) { body.innerHTML = '<tr><td colspan="3">' + esc(j.message || 'تعذر التحميل') + '</td></tr>'; return; }
+            body.innerHTML = j.items.length ? j.items.map(function (x) { return '<tr><td>' + esc(x.ts ? new Date(x.ts).toLocaleString('ar-EG', { timeZone: 'Africa/Cairo' }) : '') + '</td><td>' + esc(x.user) + '</td><td>' + esc(x.summary) + '</td></tr>'; }).join('') : '<tr><td colspan="3">لا توجد عمليات مسجلة بعد.</td></tr>';
+        } catch (e) { body.innerHTML = '<tr><td colspan="3">تعذر الاتصال بالسيرفر.</td></tr>'; }
+    }
+
+    initTableTools(); chart7(); fillStParties(); updateOfflineBadge(); flushOffline();
+    window.addEventListener('online', flushOffline);
+    setInterval(flushOffline, 30000);
 
     setDateRange('today');
     updateSummaries();
