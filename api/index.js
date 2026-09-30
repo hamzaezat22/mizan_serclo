@@ -834,6 +834,40 @@ th { background: #5A0817; color: white; }
             const getDate = o => o.Date || o.date || '';
             const getItem = o => o.Item || o.item || '';
 
+            const toN = v => Number(v) || 0;
+            const fm = v => toN(v).toLocaleString();
+            const AR_COLS = { Id: 'م', Date: 'التاريخ', DueDate: 'الاستحقاق', Amount: 'المبلغ', Total: 'الإجمالي', Value: 'القيمة', Supplier: 'المورد', Customer: 'العميل',
+                Status: 'الحالة', CheckNo: 'رقم الشيك', CheckNumber: 'رقم الشيك', Number: 'الرقم', BankName: 'البنك', Description: 'البيان', Notes: 'ملاحظات',
+                InvoiceNo: 'الفاتورة', Item: 'الصنف', Weight: 'الوزن', Qty: 'الكمية', Price: 'السعر', Type: 'النوع', Kind: 'النوع', PaymentMethod: 'طريقة الدفع',
+                Category: 'البند', Payee: 'المستفيد', Drawer: 'الساحب', Vehicle: 'السيارة', TicketNo: 'رقم الكارتة' };
+            const colName = k => AR_COLS[k] || AR_COLS[k.charAt(0).toUpperCase() + k.slice(1)] || k;
+            const genTable = (arr, emptyText) => {
+                if (!arr.length) return `<div class="empty">${emptyText}</div>`;
+                const cols = Object.keys(arr[0]).filter(k => typeof arr[0][k] !== 'object').slice(0, 7);
+                return `<div class="tbl-wrap"><table><tr>${cols.map(c => `<th>${esc(colName(c))}</th>`).join('')}</tr>` +
+                    arr.slice(0, 300).map(o => `<tr>${cols.map(c => `<td>${typeof o[c] === 'number' ? o[c].toLocaleString() : esc(o[c] == null ? '' : String(o[c]))}</td>`).join('')}</tr>`).join('') + `</table></div>`;
+            };
+            const bankTotal = bankAccounts.reduce((a, b) => a + toN(b.Balance || b.balance), 0);
+            const drawerCash = toN(m.drawer_cash);
+            const debtors = customers.map(c => ({ name: getName(c), bal: getBalance(c) })).filter(x => x.bal > 0).sort((a, b) => b.bal - a.bal);
+            const creditors = customers.map(c => ({ name: getName(c), bal: getBalance(c) })).filter(x => x.bal < 0).sort((a, b) => a.bal - b.bal);
+            const totalDebt = debtors.reduce((a, x) => a + x.bal, 0);
+            const totalCredit = creditors.reduce((a, x) => a + x.bal, 0);
+            const pendingInv = recentSales.filter(s => toN(s.RemainingAmount || s.remainingAmount) > 0);
+            const pendingTotal = pendingInv.reduce((a, s) => a + toN(s.RemainingAmount || s.remainingAmount), 0);
+            const syncAgeMin = Math.max(0, Math.round((Date.now() - new Date(data.last_sync).getTime()) / 60000));
+            const syncAgeText = syncAgeMin < 1 ? 'الآن' : syncAgeMin < 60 ? `منذ ${syncAgeMin} دقيقة` : syncAgeMin < 1440 ? `منذ ${Math.round(syncAgeMin / 60)} ساعة` : `منذ ${Math.round(syncAgeMin / 1440)} يوم`;
+            const syncStale = syncAgeMin > 1440;
+            const syncLine = `<div class="sync-note${syncStale ? ' stale' : ''}">🔄 آخر بيانات مستلمة من الكمبيوتر: ${syncAgeText}${syncStale ? ' — افتح برنامج ميزان واضغط «مزامنة فورية»' : ''} <a href="javascript:location.reload()" style="color:inherit;margin-right:8px;">تحديث الصفحة</a></div>`;
+            const NAV = [
+                { icon: '🏠', name: 'الرئيسية', open: true, items: [['tab-dash', '🏠', 'الرئيسية']] },
+                { icon: '📊', name: 'الملخصات المالية', open: true, items: [['tab-profit', '📈', 'الأرباح'], ['tab-treasury', '💰', 'الخزنة'], ['tab-payments', '🧾', 'المدفوعات'], ['tab-debts', '📒', 'المديونيات']] },
+                { icon: '🛒', name: 'المبيعات', items: [['tab-pos', '🛒', 'نقطة البيع (POS)'], ['tab-sales-reg', '📋', 'سجل المبيعات'], ['tab-pending', '📄', 'الفواتير الآجلة']] },
+                { icon: '🚚', name: 'التوريد والمخزون', items: [['tab-load', '🚚', 'ساحة توريد السيارات'], ['tab-settle', '🚛', 'تصفية سيارات الأمانة'], ['tab-stock', '📦', 'جرد بضاعة الأرضية'], ['tab-crate', '📦', 'حركة الصناديق والرهن'], ['tab-wb', '⚖️', 'ميزان بسكول']] },
+                { icon: '💼', name: 'الحسابات والخزينة', items: [['tab-col', '🧾', 'سندات التحصيل'], ['tab-exp', '💸', 'الخزينة والمصروفات'], ['tab-pur', '📥', 'فواتير المشتريات'], ['tab-bank', '🏦', 'البنوك والشيكات'], ['tab-master', '👥', 'دليل الحسابات']] },
+                { icon: '⚙️', name: 'الإعدادات', items: [['tab-key', '🔑', 'كود الوكالة والاقتران'], ['tab-printer', '🖨️', 'إعدادات الطابعات']] }
+            ];
+
             const currentOrigin = originOf(req);
             const pairingConfigJson = JSON.stringify({
                 LocalUrl: currentOrigin,
@@ -891,6 +925,52 @@ th { background: #5A0817; color: white; }
 .grid-2 { display: flex; gap: 8px; }
 .grid-2 > div { flex: 1; }
 .msg { color: #ff8a8a; font-size: 13.5px; margin-top: 10px; min-height: 18px; text-align: center; font-weight: bold; }
+.topbar { position: sticky; top: 0; z-index: 30; background: #2A040B; color: #D4AF37; border: 1px solid #D4AF37; border-radius: 10px; padding: 8px 12px; margin-bottom: 10px; display: flex; align-items: center; gap: 12px; font-weight: 800; }
+.hamb { width: auto; background: #D4AF37; color: #200308; border: none; border-radius: 8px; font-size: 22px; line-height: 1; padding: 6px 13px; cursor: pointer; }
+.drawer-overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,0.55); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 80; }
+.drawer-overlay.show { opacity: 1; pointer-events: auto; }
+.drawer { position: fixed; top: 0; right: 0; height: 100%; width: 300px; max-width: 86vw; background: #2A040B; border-left: 2px solid #D4AF37; transform: translateX(105%); transition: transform .25s; z-index: 90; display: flex; flex-direction: column; overflow-y: auto; color: #FAF4F1; }
+.drawer.open { transform: translateX(0); }
+.drawer-head { display: flex; justify-content: space-between; align-items: center; padding: 14px; border-bottom: 1px solid #5A0817; color: #D4AF37; font-size: 15px; }
+.drawer-x { width: auto; background: transparent; color: #FAF4F1; border: none; font-size: 18px; cursor: pointer; }
+.drawer-user { padding: 8px 14px; font-size: 12.5px; color: #C8B8B5; border-bottom: 1px solid #5A0817; }
+.nav-group { border-bottom: 1px solid #38050E; }
+.nav-gh { width: 100%; display: flex; justify-content: space-between; align-items: center; background: transparent; color: #D4AF37; border: none; padding: 12px 14px; font-weight: 800; font-size: 13.5px; cursor: pointer; font-family: inherit; }
+.nav-gh i { font-style: normal; transition: transform .2s; }
+.nav-group.open .nav-gh i { transform: rotate(180deg); }
+.nav-gb { display: none; padding: 0 8px 8px; }
+.nav-group.open .nav-gb { display: block; }
+.nav-item { width: 100%; display: flex; align-items: center; gap: 8px; background: transparent; color: #FAF4F1; border: none; border-radius: 8px; padding: 10px 12px; font-size: 13.5px; cursor: pointer; text-align: right; font-family: inherit; }
+.nav-item span { width: 24px; text-align: center; }
+.nav-item:hover { background: #38050E; }
+.nav-item.active { background: #5A0817; color: #D4AF37; font-weight: 800; }
+.drawer-foot { margin-top: auto; padding: 12px 14px; display: flex; gap: 8px; border-top: 1px solid #5A0817; }
+.drawer-foot a, .drawer-foot button { flex: 1; text-align: center; text-decoration: none; background: #38050E; color: #D4AF37; border: 1px solid #D4AF37; border-radius: 8px; padding: 9px; font-size: 12.5px; cursor: pointer; font-family: inherit; }
+.sync-note { background: #FFF; border: 1px solid #D4AF37; border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-size: 12.5px; color: #5A0817; font-weight: bold; }
+.sync-note.stale { background: #FEF3C7; border-color: #B45309; color: #92400E; }
+.home-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.big-card { background: linear-gradient(135deg, #2A040B, #4A0A14); color: #FAF4F1; border-radius: 14px; padding: 16px; cursor: pointer; border: 1.5px solid #D4AF37; border-top-width: 5px; box-shadow: 0 6px 18px rgba(0,0,0,0.25); transition: transform .12s; }
+.big-card:hover { transform: translateY(-2px); }
+.big-card.c-profit { border-top-color: #22c55e; } .big-card.c-treasury { border-top-color: #D4AF37; } .big-card.c-pay { border-top-color: #38bdf8; } .big-card.c-debt { border-top-color: #ef4444; }
+.bc-top { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 15px; color: #D4AF37; }
+.bc-ico { font-size: 24px; }
+.bc-val { font-size: 28px; font-weight: 800; margin: 10px 0 4px; }
+.bc-sub { font-size: 12.5px; color: #C8B8B5; min-height: 18px; }
+.bc-go { margin-top: 10px; font-size: 12px; color: #D4AF37; font-weight: bold; }
+.mini-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.mini { background: #FFF; border-radius: 10px; padding: 10px; border-right: 4px solid #5A0817; font-size: 12.5px; }
+.mini b { display: block; font-size: 17px; color: #0D7857; margin-top: 3px; }
+.pg-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.pg-head h3 { margin: 0; color: #5A0817; }
+.back-btn { width: auto; background: #5A0817; color: #D4AF37; border: 1px solid #D4AF37; border-radius: 8px; padding: 6px 12px; font-weight: bold; cursor: pointer; font-family: inherit; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 10px 0; }
+.tile { background: #FFF; border-radius: 10px; padding: 10px; border: 1px solid #D4AF37; text-align: center; font-size: 12.5px; color: #5A0817; font-weight: bold; }
+.tile b { display: block; font-size: 19px; color: #0D7857; margin-top: 4px; }
+.tile.red b { color: #DC2626; }
+.tbl-wrap { overflow-x: auto; }
+.empty { color: #888; font-size: 13px; padding: 8px; }
+.note { color: #666; font-size: 12px; line-height: 1.7; }
+h4.sec { margin: 16px 0 4px; color: #5A0817; }
 </style>
 </head>
 <body>
@@ -950,44 +1030,143 @@ th { background: #5A0817; color: white; }
             <button type="button" class="quick-btn" onclick="setDateRange('all')">عرض الكل</button>
         </div>
 
-        <!-- شريط التنقل للأقسام -->
-        <div class="nav-scroll">
-            <button class="tab-btn active" onclick="switchTab('tab-dash', this)">📊 المؤشرات الحية</button>
-            <button class="tab-btn" onclick="switchTab('tab-pos', this)">🛒 نقطة البيع (POS)</button>
-            <button class="tab-btn" onclick="switchTab('tab-sales-reg', this)">📋 سجل المبيعات</button>
-            <button class="tab-btn" onclick="switchTab('tab-load', this)">🚚 ساحة توريد السيارات</button>
-            <button class="tab-btn" onclick="switchTab('tab-settle', this)">🚛 تصفية سيارات الأمانة</button>
-            <button class="tab-btn" onclick="switchTab('tab-stock', this)">📦 جرد بضاعة الأرضية</button>
-            <button class="tab-btn" onclick="switchTab('tab-col', this)">🧾 سندات التحصيل</button>
-            <button class="tab-btn" onclick="switchTab('tab-pending', this)">📄 الفواتير الآجلة</button>
-            <button class="tab-btn" onclick="switchTab('tab-exp', this)">💸 الخزينة والمصروفات</button>
-            <button class="tab-btn" onclick="switchTab('tab-pur', this)">📥 فواتير المشتريات</button>
-            <button class="tab-btn" onclick="switchTab('tab-crate', this)">📦 حركة الصناديق والرهن</button>
-            <button class="tab-btn" onclick="switchTab('tab-bank', this)">🏦 البنوك والشيكات</button>
-            <button class="tab-btn" onclick="switchTab('tab-wb', this)">⚖️ ميزان بسكول</button>
-            <button class="tab-btn" onclick="switchTab('tab-master', this)">👥 دليل الحسابات</button>
-            <button class="tab-btn" onclick="switchTab('tab-key', this)">🔑 كود الوكالة والاقتران</button>
-            <button class="tab-btn" onclick="switchTab('tab-printer', this)">🖨️ إعدادات الطابعات</button>
+        <!-- شريط علوي + قائمة جانبية منسدلة -->
+        <div class="topbar">
+            <button type="button" class="hamb" onclick="openDrawer()" aria-label="القائمة">☰</button>
+            <span id="topTitle">🏠 الرئيسية</span>
+        </div>
+        <div id="drawerOverlay" class="drawer-overlay" onclick="closeDrawer()"></div>
+        <aside id="drawer" class="drawer">
+            <div class="drawer-head"><b>🏢 ${esc(data.agency_name)}</b><button type="button" class="drawer-x" onclick="closeDrawer()">✖</button></div>
+            <div class="drawer-user" id="drawerUser">👤 --</div>
+            <nav>
+                ${NAV.map(g => `<div class="nav-group${g.open ? ' open' : ''}">
+                    <button type="button" class="nav-gh" onclick="toggleGroup(this)"><span>${g.icon} ${g.name}</span><i>▾</i></button>
+                    <div class="nav-gb">${g.items.map(it => `<button type="button" class="nav-item${it[0] === 'tab-dash' ? ' active' : ''}" data-tab="${it[0]}" data-title="${it[1]} ${it[2]}" onclick="switchTab('${it[0]}')"><span>${it[1]}</span>${it[2]}</button>`).join('')}</div>
+                </div>`).join('')}
+            </nav>
+            <div class="drawer-foot"><a href="/account">👤 حسابي والاشتراك</a><button type="button" onclick="handleLogout()">🚪 خروج</button></div>
+        </aside>
+
+        <!-- 1. الرئيسية: كروت الأرباح والخزنة والمدفوعات والمديونيات -->
+        <div id="tab-dash" class="tab-content active">
+            ${syncLine}
+            <div class="home-grid">
+                <div class="big-card c-profit" onclick="switchTab('tab-profit')">
+                    <div class="bc-top"><span class="bc-ico">📈</span>الأرباح</div>
+                    <div class="bc-val">${fm(m.net_profit)} ج</div>
+                    <div class="bc-sub">مبيعات اليوم: ${fm(m.today_sales)} ج</div>
+                    <div class="bc-go">عرض التفاصيل ◂</div>
+                </div>
+                <div class="big-card c-treasury" onclick="switchTab('tab-treasury')">
+                    <div class="bc-top"><span class="bc-ico">💰</span>الخزنة</div>
+                    <div class="bc-val">${fm(drawerCash + bankTotal)} ج</div>
+                    <div class="bc-sub">نقدية الدرج: ${fm(drawerCash)} • البنوك: ${fm(bankTotal)}</div>
+                    <div class="bc-go">عرض التفاصيل ◂</div>
+                </div>
+                <div class="big-card c-pay" onclick="switchTab('tab-payments')">
+                    <div class="bc-top"><span class="bc-ico">🧾</span>المدفوعات</div>
+                    <div class="bc-val"><span data-sum="in+salepaid" data-unit=" ج">0 ج</span></div>
+                    <div class="bc-sub">مقبوضات الفترة • مصروفات: <span data-sum="exp" data-unit=" ج">0 ج</span></div>
+                    <div class="bc-go">عرض التفاصيل ◂</div>
+                </div>
+                <div class="big-card c-debt" onclick="switchTab('tab-debts')">
+                    <div class="bc-top"><span class="bc-ico">📒</span>المديونيات</div>
+                    <div class="bc-val">${fm(totalDebt)} ج</div>
+                    <div class="bc-sub">${debtors.length} عميل مدين • آجل غير مسدد: ${fm(pendingTotal)} ج</div>
+                    <div class="bc-go">عرض التفاصيل ◂</div>
+                </div>
+            </div>
+            <div class="mini-row">
+                <div class="mini">💵 مبيعات اليوم<b>${fm(m.today_sales)} ج</b></div>
+                <div class="mini">🚚 سيارات مفتوحة<b>${fm(m.open_cars_count)}</b></div>
+                <div class="mini">📦 برانيك بالسوق<b>${fm(m.crates_in_market)}</b></div>
+            </div>
+            <p class="note">المدفوعات تتغير حسب الفترة المختارة بالأعلى، وباقي الأرقام كما أرسلها برنامج الكمبيوتر.</p>
         </div>
 
-        <!-- 1. المؤشرات الحية -->
-        <div id="tab-dash" class="tab-content active">
-            <div class="card">
-                <div>💰 نقدية الدرج الحالية:</div>
-                <div class="val">${Number(m.drawer_cash || 0).toLocaleString()} ج</div>
+        <!-- تفاصيل: الأرباح -->
+        <div id="tab-profit" class="tab-content">
+            <div class="pg-head"><button type="button" class="back-btn" onclick="switchTab('tab-dash')">▸ الرئيسية</button><h3>📈 الأرباح</h3></div>
+            ${syncLine}
+            <div class="tiles">
+                <div class="tile">صافي الربح (من الكمبيوتر)<b>${fm(m.net_profit)} ج</b></div>
+                <div class="tile">مبيعات اليوم<b>${fm(m.today_sales)} ج</b></div>
+                <div class="tile">مبيعات الفترة<b data-sum="sale" data-unit=" ج">0 ج</b></div>
+                <div class="tile">عدد الفواتير<b data-cnt="sale">0</b></div>
+                <div class="tile red">مصروفات الفترة<b data-sum="exp" data-unit=" ج">0 ج</b></div>
+                <div class="tile">تحصيلات الفترة<b data-sum="in" data-unit=" ج">0 ج</b></div>
             </div>
-            <div class="card">
-                <div>💵 مبيعات اليوم:</div>
-                <div class="val" style="color:#5A0817;">${Number(m.today_sales || 0).toLocaleString()} ج</div>
+            <p class="note">صافي الربح يحسبه برنامج الكمبيوتر وقت المزامنة. بقية الأرقام تتغير حسب الفترة المختارة.</p>
+            <h4 class="sec">فواتير المبيعات</h4>
+            <div class="tbl-wrap"><table>
+                <thead><tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الصنف</th><th>الإجمالي</th></tr></thead>
+                <tbody id="profSalesBody">${recentSales.map(s => `<tr data-date="${esc((s.Date || s.date || '').slice(0, 10))}" data-k="sale" data-amt="${toN(s.Value || s.value)}"><td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td><td>${esc(s.Date || s.date)}</td><td>${esc(s.Customer || s.customer)}</td><td>${esc(s.Item || s.item)}</td><td>${fm(s.Value || s.value)} ج</td></tr>`).join('')}</tbody>
+            </table></div>
+        </div>
+
+        <!-- تفاصيل: الخزنة -->
+        <div id="tab-treasury" class="tab-content">
+            <div class="pg-head"><button type="button" class="back-btn" onclick="switchTab('tab-dash')">▸ الرئيسية</button><h3>💰 الخزنة</h3></div>
+            ${syncLine}
+            <div class="tiles">
+                <div class="tile">نقدية الدرج<b>${fm(drawerCash)} ج</b></div>
+                <div class="tile">أرصدة البنوك<b>${fm(bankTotal)} ج</b></div>
+                <div class="tile">إجمالي الخزنة<b>${fm(drawerCash + bankTotal)} ج</b></div>
+                <div class="tile red">مصروفات الفترة<b data-sum="exp" data-unit=" ج">0 ج</b></div>
             </div>
-            <div class="card">
-                <div>📈 أرباح الوكالة اليومية:</div>
-                <div class="val">${Number(m.net_profit || 0).toLocaleString()} ج</div>
+            <h4 class="sec">🏦 الحسابات البنكية</h4>
+            ${bankAccounts.length ? `<div class="tbl-wrap"><table><tr><th>البنك / الحساب</th><th>رقم الحساب</th><th>الرصيد</th></tr>${bankAccounts.map(b => `<tr><td><b>${esc(b.BankName || b.bankName)}</b> (${esc(b.AccountName || b.accountName)})</td><td>${esc(b.AccountNumber || b.accountNumber)}</td><td>${fm(b.Balance || b.balance)} ج</td></tr>`).join('')}</table></div>` : '<div class="empty">لا توجد حسابات بنكية مسجلة.</div>'}
+            <h4 class="sec">🧾 الشيكات</h4>
+            ${genTable(checks, 'لا توجد شيكات.')}
+            <button type="button" class="back-btn" style="margin-top:12px" onclick="switchTab('tab-exp')">عرض المصروفات وتسجيل مصروف ◂</button>
+        </div>
+
+        <!-- تفاصيل: المدفوعات -->
+        <div id="tab-payments" class="tab-content">
+            <div class="pg-head"><button type="button" class="back-btn" onclick="switchTab('tab-dash')">▸ الرئيسية</button><h3>🧾 المدفوعات</h3></div>
+            ${syncLine}
+            <div class="tiles">
+                <div class="tile">مقبوض عند البيع<b data-sum="salepaid" data-unit=" ج">0 ج</b></div>
+                <div class="tile">سندات التحصيل<b data-sum="in" data-unit=" ج">0 ج</b></div>
+                <div class="tile">إجمالي المقبوضات<b data-sum="in+salepaid" data-unit=" ج">0 ج</b></div>
+                <div class="tile red">المصروفات<b data-sum="exp" data-unit=" ج">0 ج</b></div>
             </div>
-            <div class="card">
-                <div>📦 برانيك متداولة بالسوق:</div>
-                <div class="val" style="color:#B45309;">${Number(m.crates_in_market || 0).toLocaleString()} برنيكة</div>
+            <h4 class="sec">📥 سندات التحصيل</h4>
+            <div class="tbl-wrap"><table>
+                <thead><tr><th>السند</th><th>التاريخ</th><th>العميل</th><th>المبلغ</th><th>الطريقة</th></tr></thead>
+                <tbody id="payInBody">${collections.map(c => `<tr data-date="${esc((c.Date || c.date || '').slice(0, 10))}" data-k="in" data-amt="${toN(c.Amount || c.amount)}"><td><b>${esc(c.ReceiptNo || c.receiptNo)}</b></td><td>${esc(c.Date || c.date)}</td><td>${esc(c.Customer || c.customer)}</td><td>${fm(c.Amount || c.amount)} ج</td><td>${esc(c.PaymentMethod || c.paymentMethod)}</td></tr>`).join('')}</tbody>
+            </table></div>
+            <h4 class="sec">💵 مبالغ مدفوعة عند البيع</h4>
+            <div class="tbl-wrap"><table>
+                <thead><tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>المدفوع</th></tr></thead>
+                <tbody id="salePaidBody">${recentSales.filter(s => toN(s.PaidAmount || s.paidAmount) > 0).map(s => `<tr data-date="${esc((s.Date || s.date || '').slice(0, 10))}" data-k="salepaid" data-amt="${toN(s.PaidAmount || s.paidAmount)}"><td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td><td>${esc(s.Date || s.date)}</td><td>${esc(s.Customer || s.customer)}</td><td>${fm(s.PaidAmount || s.paidAmount)} ج</td></tr>`).join('')}</tbody>
+            </table></div>
+            <h4 class="sec">💸 المصروفات</h4>
+            <div class="tbl-wrap"><table>
+                <thead><tr><th>التاريخ</th><th>البند</th><th>البيان</th><th>المبلغ</th></tr></thead>
+                <tbody id="payOutBody">${expenses.map(e => `<tr data-date="${esc((e.Date || e.date || '').slice(0, 10))}" data-k="exp" data-amt="${toN(e.Amount || e.amount)}"><td>${esc(e.Date || e.date)}</td><td>${esc(e.Category || e.category)}</td><td>${esc(e.Description || e.description)}</td><td>${fm(e.Amount || e.amount)} ج</td></tr>`).join('')}</tbody>
+            </table></div>
+            <h4 class="sec">📥 فواتير المشتريات</h4>
+            ${genTable(purchases, 'لا توجد فواتير مشتريات.')}
+        </div>
+
+        <!-- تفاصيل: المديونيات -->
+        <div id="tab-debts" class="tab-content">
+            <div class="pg-head"><button type="button" class="back-btn" onclick="switchTab('tab-dash')">▸ الرئيسية</button><h3>📒 المديونيات</h3></div>
+            ${syncLine}
+            <div class="tiles">
+                <div class="tile red">إجمالي المديونيات<b>${fm(totalDebt)} ج</b></div>
+                <div class="tile">عدد العملاء المدينين<b>${debtors.length}</b></div>
+                <div class="tile red">فواتير آجلة غير مسددة<b>${fm(pendingTotal)} ج</b></div>
+                <div class="tile">أرصدة دائنة للعملاء<b>${fm(Math.abs(totalCredit))} ج</b></div>
             </div>
+            <input type="text" id="debtSearch" placeholder="🔎 ابحث باسم العميل..." oninput="filterDebts()" />
+            <h4 class="sec">العملاء المدينون (الأعلى مديونية أولاً)</h4>
+            ${debtors.length ? `<div class="tbl-wrap"><table><thead><tr><th>العميل</th><th>المديونية</th></tr></thead><tbody id="debtBody">${debtors.map(x => `<tr data-name="${esc(x.name)}"><td><b>${esc(x.name)}</b></td><td style="color:#DC2626;font-weight:bold;">${fm(x.bal)} ج</td></tr>`).join('')}</tbody></table></div>` : '<div class="empty">لا توجد مديونيات.</div>'}
+            ${creditors.length ? `<h4 class="sec">أرصدة دائنة (للعميل عند الوكالة)</h4><div class="tbl-wrap"><table><thead><tr><th>العميل</th><th>الرصيد</th></tr></thead><tbody id="creditBody">${creditors.map(x => `<tr data-name="${esc(x.name)}"><td>${esc(x.name)}</td><td>${fm(Math.abs(x.bal))} ج</td></tr>`).join('')}</tbody></table></div>` : ''}
+            <h4 class="sec">📄 الفواتير الآجلة غير المسددة</h4>
+            ${pendingInv.length ? `<div class="tbl-wrap"><table><tr><th>الفاتورة</th><th>التاريخ</th><th>العميل</th><th>الإجمالي</th><th>المتبقي</th></tr>${pendingInv.map(s => `<tr><td><b>${esc(s.InvoiceNo || s.invoiceNo)}</b></td><td>${esc(s.Date || s.date)}</td><td>${esc(s.Customer || s.customer)}</td><td>${fm(s.Value || s.value)} ج</td><td style="color:#DC2626;font-weight:bold;">${fm(s.RemainingAmount || s.remainingAmount)} ج</td></tr>`).join('')}</table></div>` : '<div class="empty">لا توجد فواتير آجلة.</div>'}
         </div>
 
         <!-- شاشة عرض كود الوكالة والاقتران الفوري بالـ QR -->
@@ -1479,6 +1658,7 @@ th { background: #5A0817; color: white; }
             document.getElementById('loginScreen').style.display = 'none';
             document.getElementById('mainAppScreen').style.display = 'block';
             document.getElementById('activeUserLabel').innerHTML = '👤 الموظف: <b>' + currentUser.full_name + '</b> (' + (currentUser.job_title || currentUser.role) + ')';
+            document.getElementById('drawerUser').innerHTML = document.getElementById('activeUserLabel').innerHTML;
         } else {
             document.getElementById('loginScreen').style.display = 'flex';
             document.getElementById('mainAppScreen').style.display = 'none';
@@ -1536,12 +1716,55 @@ th { background: #5A0817; color: white; }
         }
     }
 
-    function switchTab(tabId, btn) {
+    function openDrawer() {
+        document.getElementById('drawer').classList.add('open');
+        document.getElementById('drawerOverlay').classList.add('show');
+        document.body.style.overflow = 'hidden';
+    }
+    function closeDrawer() {
+        document.getElementById('drawer').classList.remove('open');
+        document.getElementById('drawerOverlay').classList.remove('show');
+        document.body.style.overflow = '';
+    }
+    function toggleGroup(btn) { btn.parentNode.classList.toggle('open'); }
+
+    function switchTab(tabId) {
         document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-        document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
         const target = document.getElementById(tabId);
         if (target) target.classList.add('active');
-        if (btn) btn.classList.add('active');
+        document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.getAttribute('data-tab') === tabId));
+        const it = document.querySelector('.nav-item[data-tab="' + tabId + '"]');
+        if (it) {
+            const g = it.parentNode.parentNode;
+            if (g) g.classList.add('open');
+            document.getElementById('topTitle').textContent = it.getAttribute('data-title');
+        }
+        closeDrawer();
+        window.scrollTo(0, 0);
+        try { history.replaceState(null, '', '#' + tabId); } catch (e) {}
+    }
+
+    function updateSummaries() {
+        const sums = {};
+        document.querySelectorAll('tr[data-k]').forEach(tr => {
+            if (tr.style.display === 'none') return;
+            const k = tr.getAttribute('data-k');
+            sums[k] = (sums[k] || 0) + (Number(tr.getAttribute('data-amt')) || 0);
+            sums[k + '#n'] = (sums[k + '#n'] || 0) + 1;
+        });
+        document.querySelectorAll('[data-sum]').forEach(el => {
+            let v = 0;
+            el.getAttribute('data-sum').split('+').forEach(k => { v += sums[k] || 0; });
+            el.textContent = v.toLocaleString() + (el.getAttribute('data-unit') || '');
+        });
+        document.querySelectorAll('[data-cnt]').forEach(el => { el.textContent = String(sums[el.getAttribute('data-cnt') + '#n'] || 0); });
+    }
+
+    function filterDebts() {
+        const q = document.getElementById('debtSearch').value.trim().toLowerCase();
+        document.querySelectorAll('#debtBody tr, #creditBody tr').forEach(tr => {
+            tr.style.display = (tr.getAttribute('data-name') || '').toLowerCase().indexOf(q) > -1 ? '' : 'none';
+        });
     }
 
     function setDateRange(type) {
@@ -1566,7 +1789,7 @@ th { background: #5A0817; color: white; }
         const from = document.getElementById('filterFromDate').value;
         const to = document.getElementById('filterToDate').value;
 
-        ['salesTableBody', 'colTableBody', 'expTableBody'].forEach(bodyId => {
+        ['salesTableBody', 'colTableBody', 'expTableBody', 'profSalesBody', 'payInBody', 'salePaidBody', 'payOutBody'].forEach(bodyId => {
             const tbody = document.getElementById(bodyId);
             if (!tbody) return;
             const rows = tbody.querySelectorAll('tr');
@@ -1579,6 +1802,7 @@ th { background: #5A0817; color: white; }
                 tr.style.display = show ? '' : 'none';
             });
         });
+        updateSummaries();
     }
 
     function calcPosTotal() {
@@ -1880,6 +2104,11 @@ th { background: #5A0817; color: white; }
     }
 
     setDateRange('today');
+    updateSummaries();
+    (function () {
+        const h = (location.hash || '').replace('#', '');
+        if (h.indexOf('tab-') === 0 && document.getElementById(h)) switchTab(h);
+    })();
     </script>
 </body>
 </html>
