@@ -618,15 +618,28 @@ th { background: #5A0817; color: white; }
         }
 
         if (pathname === '/api/system/check-update') {
-            const clientVer = query.version || "1.0.0";
+            const clientVer = String(query.version || '1.0.0').trim();
+            const rel = (await billing.getUpdateInfo()) || { version: versionInfo.latest_version, download_url: '', changelog: versionInfo.changelog };
+            const cmp = billing.verCmp(clientVer, rel.version);
+            const hasUpdate = Number.isNaN(cmp) ? clientVer !== rel.version : cmp < 0;
+            const belowMin = hasUpdate && rel.min_version && billing.verCmp(clientVer, rel.min_version) < 0;
+            const force = !!(hasUpdate && (rel.mandatory || belowMin));
+            const items = String(rel.changelog || '').split(/\r?\n/).map(x => x.replace(/^[\s\-•*]+/, '').trim()).filter(Boolean);
             return sendJson(res, 200, {
                 success: true,
-                has_update: clientVer !== versionInfo.latest_version,
+                has_update: hasUpdate,
+                force_update: force,
                 client_version: clientVer,
-                latest_version: versionInfo.latest_version,
-                download_url: versionInfo.download_url,
-                message: "أنت تعمل على أحدث إصدار معتمد.",
-                changelog: versionInfo.changelog
+                latest_version: rel.version,
+                min_version: rel.min_version || '',
+                download_url: rel.download_url || '',
+                sha256: rel.sha256 || '',
+                size: rel.size || 0,
+                file_name: rel.file_name || '',
+                published_at: rel.published_at || '',
+                message: hasUpdate ? (force ? 'يوجد تحديث إجباري، لازم تحدّث البرنامج للاستمرار.' : 'يوجد إصدار جديد متاح للتحميل.') : 'أنت تعمل على أحدث إصدار معتمد.',
+                changelog: items.join('\n'),
+                changelog_items: items
             });
         }
 
